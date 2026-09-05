@@ -2,17 +2,24 @@ import type { GameEngine, GameEngineContext } from "@/games/types";
 import type { GameResult } from "@/core/types";
 
 const ROUND_MS = 30000;
-const SPAWN_MIN_MS = 500;
-const SPAWN_MAX_MS = 950;
-const OBJECT_LIFETIME_MS = 1700;
-const BOMB_CHANCE = 0.22;
+const SPAWN_MIN_MS = 550;
+const SPAWN_MAX_MS = 1000;
+const OBJECT_LIFETIME_MS = 2000;
+/** Cuánto se deja el objeto en pantalla tras ser cortado, para la animación. */
+const SLICE_LINGER_MS = 450;
+const BOMB_CHANCE = 0.2;
+
+export const FRUIT_KINDS = ["apple", "watermelon", "orange", "banana"] as const;
+export type FruitKind = (typeof FRUIT_KINDS)[number];
+export type ObjectKind = FruitKind | "bomb";
 
 export interface FallingObject {
   id: number;
-  kind: "fruit" | "bomb";
-  x: number; // 0..1
+  kind: ObjectKind;
+  x: number; // 0..1, posición horizontal
   spawnedAt: number;
   sliced: boolean;
+  slicedAt: number | null;
   slicedBy: string | null;
 }
 
@@ -23,6 +30,10 @@ export interface FruitSliceState {
   remainingMs: number;
   objects: FallingObject[];
   scores: Record<string, number>;
+}
+
+function randomFruitKind(): FruitKind {
+  return FRUIT_KINDS[Math.floor(Math.random() * FRUIT_KINDS.length)];
 }
 
 export function createFruitSliceEngine(context: GameEngineContext): GameEngine<Record<string, never>> {
@@ -65,8 +76,9 @@ export function createFruitSliceEngine(context: GameEngineContext): GameEngine<R
       const target = activeSliceable();
       if (!target) return;
       target.sliced = true;
+      target.slicedAt = elapsed;
       target.slicedBy = playerId;
-      state.scores[playerId] = (state.scores[playerId] ?? 0) + (target.kind === "fruit" ? 1 : -1);
+      state.scores[playerId] = (state.scores[playerId] ?? 0) + (target.kind === "bomb" ? -1 : 1);
       emit();
     },
 
@@ -79,16 +91,21 @@ export function createFruitSliceEngine(context: GameEngineContext): GameEngine<R
       if (elapsed >= nextSpawnAt) {
         state.objects.push({
           id: nextId++,
-          kind: Math.random() < BOMB_CHANCE ? "bomb" : "fruit",
-          x: 0.1 + Math.random() * 0.8,
+          kind: Math.random() < BOMB_CHANCE ? "bomb" : randomFruitKind(),
+          x: 0.12 + Math.random() * 0.76,
           spawnedAt: elapsed,
           sliced: false,
+          slicedAt: null,
           slicedBy: null,
         });
         scheduleNextSpawn();
       }
 
-      state.objects = state.objects.filter((o) => elapsed - o.spawnedAt < OBJECT_LIFETIME_MS + 300);
+      state.objects = state.objects.filter((o) =>
+        o.sliced
+          ? elapsed - (o.slicedAt ?? elapsed) < SLICE_LINGER_MS
+          : elapsed - o.spawnedAt < OBJECT_LIFETIME_MS
+      );
 
       if (state.remainingMs <= 0) {
         state.phase = "gameover";

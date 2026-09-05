@@ -8,7 +8,7 @@ const DIRECTIONS: Direction[] = ["up", "down", "left", "right"];
 const SHOW_STEP_MS = 600;
 const SHOW_GAP_MS = 250;
 const INPUT_MS_PER_STEP = 1600;
-const INPUT_MS_BASE = 800;
+const INPUT_MS_BASE = 1100;
 const MAX_ROUND = 15;
 
 interface SimonPlayerState {

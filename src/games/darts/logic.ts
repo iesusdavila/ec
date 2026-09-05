@@ -2,10 +2,10 @@ import type { GameEngine, GameEngineContext } from "@/games/types";
 import type { GameResult } from "@/core/types";
 
 const THROWS_PER_PLAYER = 3;
+/** Pequeño temblor para que no sea perfectamente milimétrico, no reemplaza la puntería real. */
+const HAND_JITTER = 0.03;
 
-export type DartsInput =
-  | { type: "aim"; x: number }
-  | { type: "throw"; intensity: number };
+export type DartsInput = { type: "aim"; x: number; y: number } | { type: "throw" };
 
 export interface DartThrow {
   playerId: string;
@@ -21,15 +21,16 @@ export interface DartsState {
   throwsTaken: Record<string, number>;
   scores: Record<string, number>;
   aimX: number;
+  aimY: number;
   lastThrow: DartThrow | null;
 }
 
-function pointsForOffset(absX: number): number {
-  if (absX < 0.06) return 50;
-  if (absX < 0.16) return 25;
-  if (absX < 0.35) return 15;
-  if (absX < 0.6) return 10;
-  if (absX < 0.85) return 5;
+function pointsForDistance(distance: number): number {
+  if (distance < 0.08) return 50;
+  if (distance < 0.2) return 25;
+  if (distance < 0.4) return 15;
+  if (distance < 0.65) return 10;
+  if (distance < 0.9) return 5;
   return 0;
 }
 
@@ -43,6 +44,7 @@ export function createDartsEngine(context: GameEngineContext): GameEngine<DartsI
     throwsTaken: Object.fromEntries(turnOrder.map((id) => [id, 0])),
     scores: Object.fromEntries(turnOrder.map((id) => [id, 0])),
     aimX: 0,
+    aimY: 0,
     lastThrow: null,
   };
 
@@ -62,6 +64,7 @@ export function createDartsEngine(context: GameEngineContext): GameEngine<DartsI
       if (state.throwsTaken[candidate] < THROWS_PER_PLAYER) {
         state.currentPlayerId = candidate;
         state.aimX = 0;
+        state.aimY = 0;
         return;
       }
     }
@@ -77,15 +80,17 @@ export function createDartsEngine(context: GameEngineContext): GameEngine<DartsI
 
       if (input.type === "aim") {
         state.aimX = Math.max(-1, Math.min(1, input.x));
+        state.aimY = Math.max(-1, Math.min(1, input.y));
         emit();
         return;
       }
 
       if (input.type === "throw") {
-        const jitter = (Math.random() - 0.5) * 0.08;
-        const x = Math.max(-1, Math.min(1, state.aimX + jitter));
-        const y = (Math.random() - 0.5) * 0.3;
-        const points = pointsForOffset(Math.abs(x));
+        const jitterX = (Math.random() - 0.5) * HAND_JITTER;
+        const jitterY = (Math.random() - 0.5) * HAND_JITTER;
+        const x = Math.max(-1, Math.min(1, state.aimX + jitterX));
+        const y = Math.max(-1, Math.min(1, state.aimY + jitterY));
+        const points = pointsForDistance(Math.hypot(x, y));
 
         state.throwsTaken[playerId] += 1;
         state.scores[playerId] += points;

@@ -1,57 +1,25 @@
-"use client";
-
-import { useEffect, useRef } from "react";
 import type { GameMonitorProps } from "@/games/types";
 import type { DartsState } from "@/games/darts/logic";
+import { GameStage } from "@/components/GameStage";
+import { DartIcon } from "@/components/icons/GameIcons";
 
-const RING_COLORS = ["#3f3f46", "#ffffff", "#5B8CFF", "#ffffff", "#FF6B5B"];
+/** Anillos del tablero, de afuera hacia adentro (diámetro en % y color). */
+const RINGS = [
+  { diameter: 90, color: "#3f3f46" },
+  { diameter: 65, color: "#e4e4e7" },
+  { diameter: 40, color: "#5B8CFF" },
+  { diameter: 20, color: "#e4e4e7" },
+  { diameter: 8, color: "#FF6B5B" },
+];
+
+/** Convierte una coordenada de puntería (-1..1) a porcentaje dentro del tablero. */
+function toPct(v: number): number {
+  return 50 + v * 45;
+}
 
 export function DartsMonitorView({ state, players }: GameMonitorProps<unknown>) {
   const darts = state as DartsState | null;
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const nameFor = (id: string) => players.find((p) => p.id === id)?.name ?? "?";
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !darts) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    const { width, height } = canvas.getBoundingClientRect();
-    canvas.width = width;
-    canvas.height = height;
-    ctx.clearRect(0, 0, width, height);
-
-    const cx = width / 2;
-    const cy = height / 2;
-    const maxRadius = Math.min(width, height) * 0.42;
-
-    RING_COLORS.forEach((color, i) => {
-      const radius = maxRadius * (1 - i / RING_COLORS.length);
-      ctx.beginPath();
-      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-      ctx.fillStyle = color;
-      ctx.fill();
-    });
-
-    // Indicador de puntería actual mientras el jugador activo apunta.
-    const aimX = cx + darts.aimX * maxRadius;
-    ctx.beginPath();
-    ctx.moveTo(aimX, height);
-    ctx.lineTo(aimX, height - 24);
-    ctx.strokeStyle = "var(--color-accent)";
-    ctx.lineWidth = 4;
-    ctx.stroke();
-
-    if (darts.lastThrow) {
-      const px = cx + darts.lastThrow.x * maxRadius;
-      const py = cy + darts.lastThrow.y * maxRadius;
-      ctx.beginPath();
-      ctx.arc(px, py, 6, 0, Math.PI * 2);
-      ctx.fillStyle = "#111113";
-      ctx.fill();
-    }
-  }, [darts]);
 
   if (!darts) {
     return <div className="flex flex-1 items-center justify-center">Cargando…</div>;
@@ -69,7 +37,45 @@ export function DartsMonitorView({ state, players }: GameMonitorProps<unknown>) 
           </p>
         ) : null}
       </div>
-      <canvas ref={canvasRef} className="flex-1 w-full rounded-2xl bg-surface" />
+
+      <div className="flex flex-1 items-center justify-center">
+        <GameStage aspectRatio="1 / 1" className="max-w-[min(70vh,100%)]">
+          {RINGS.map((ring) => (
+            <div
+              key={ring.diameter}
+              className="absolute rounded-full"
+              style={{
+                width: `${ring.diameter}%`,
+                height: `${ring.diameter}%`,
+                left: "50%",
+                top: "50%",
+                transform: "translate(-50%, -50%)",
+                backgroundColor: ring.color,
+              }}
+            />
+          ))}
+
+          {darts.phase === "aiming" && (
+            <div
+              className="absolute h-6 w-6 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white/80"
+              style={{ left: `${toPct(darts.aimX)}%`, top: `${toPct(darts.aimY)}%` }}
+            />
+          )}
+
+          {darts.lastThrow && (
+            <div
+              className="absolute h-10 w-10 -translate-x-1/2 -translate-y-full"
+              style={{
+                left: `${toPct(darts.lastThrow.x)}%`,
+                top: `${toPct(darts.lastThrow.y)}%`,
+              }}
+            >
+              <DartIcon className="h-full w-full drop-shadow" />
+            </div>
+          )}
+        </GameStage>
+      </div>
+
       <div className="flex flex-wrap justify-center gap-3">
         {darts.turnOrder.map((id) => (
           <div

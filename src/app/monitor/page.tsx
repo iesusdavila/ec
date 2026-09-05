@@ -81,13 +81,21 @@ export default function MonitorPage() {
     }
   }, [players.length, selectedGame, store]);
 
-  // Transmitir el estado de la sesión a los jugadores conectados.
+  // Transmitir el estado de la sesión a los jugadores conectados. Se
+  // reenvía periódicamente (no solo al cambiar) porque es un solo mensaje
+  // por transición: si Pusher lo pierde, un jugador se quedaría viendo la
+  // pantalla anterior para siempre sin este reintento de reconciliación.
   useEffect(() => {
     if (!channel) return;
-    sendClientEvent(channel, RealtimeEvent.SessionState, {
-      status: store.status,
-      selectedGameId: store.selectedGameId,
-    });
+    const send = () => {
+      sendClientEvent(channel, RealtimeEvent.SessionState, {
+        status: store.status,
+        selectedGameId: store.selectedGameId,
+      });
+    };
+    send();
+    const interval = setInterval(send, 1000);
+    return () => clearInterval(interval);
   }, [channel, store.status, store.selectedGameId]);
 
   // Avisar a los jugadores si el monitor se cierra.

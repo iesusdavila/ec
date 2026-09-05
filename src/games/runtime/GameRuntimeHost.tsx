@@ -12,6 +12,16 @@ const BROADCAST_INTERVAL_MS = 70;
 /** Si algún teléfono no avisa que está listo (permiso/calibración) en este
  * tiempo, se arranca de todas formas para no dejar la partida bloqueada. */
 const READY_TIMEOUT_MS = 6000;
+/**
+ * Reenvío periódico del último estado conocido, independiente de que haya
+ * cambiado. Los juegos por turnos (p. ej. Dardos) solo emiten estado en
+ * momentos puntuales (una vez al iniciar, una vez por tirada); si ese único
+ * mensaje se pierde en la red, un jugador se queda esperando para siempre.
+ * Esta retransmisión de reconciliación garantiza que, en menos de un
+ * segundo, todos terminan viendo el estado real sin importar si algún
+ * mensaje individual no llegó.
+ */
+const HEARTBEAT_MS = 600;
 
 interface PlayerInputMessage {
   playerId: string;
@@ -78,21 +88,28 @@ export function GameRuntimeHost({
 
     const requiredIds = players.map((p) => p.id);
 
-    const broadcast = throttle((snapshot: unknown) => {
+    let latestSnapshot: unknown = null;
+    const sendSnapshot = (snapshot: unknown) => {
       sendClientEvent(channel, RealtimeEvent.GameState, {
         gameId: definition.id,
         state: snapshot,
       });
-    }, BROADCAST_INTERVAL_MS);
+    };
+    const broadcast = throttle(sendSnapshot, BROADCAST_INTERVAL_MS);
 
     const engine = definition.createEngine({
       players,
       onStateChange: (next) => {
+        latestSnapshot = next;
         setStateBox({ value: next });
         broadcast(next);
       },
     });
     engineRef.current = engine;
+
+    const heartbeat = setInterval(() => {
+      if (latestSnapshot !== null) sendSnapshot(latestSnapshot);
+    }, HEARTBEAT_MS);
 
     let started = false;
     let raf = 0;
@@ -135,6 +152,7 @@ export function GameRuntimeHost({
 
     return () => {
       clearTimeout(fallbackTimeout);
+      clearInterval(heartbeat);
       cancelAnimationFrame(raf);
       engine.cleanup();
       engineRef.current = null;
