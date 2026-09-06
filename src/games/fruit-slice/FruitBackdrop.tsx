@@ -1,3 +1,5 @@
+import { memo } from "react";
+
 /**
  * Fondo del juego "Corta frutas": un cielo nocturno con mariposas en tonos
  * apagados (índigo, pizarra, ciruela).
@@ -67,7 +69,15 @@ function ButterflyShape({ color }: { color: string }) {
   );
 }
 
-export function FruitBackdrop() {
+/**
+ * Va memoizado a propósito. El monitor re-renderiza el juego en cada tick
+ * (~60 veces por segundo, porque el motor emite estado en cada frame) y este
+ * fondo tiene decenas de nodos con degradados y filtros. Sin `memo`, React
+ * reconciliaba todo el cielo estrellado y las mariposas 60 veces por segundo
+ * para no cambiar nada: puro trabajo tirado que se notaba como tirones en el
+ * cursor. No recibe props, así que memoizado se monta una sola vez.
+ */
+export const FruitBackdrop = memo(function FruitBackdrop() {
   return (
     <div
       className="pointer-events-none absolute inset-0 overflow-hidden"
@@ -117,4 +127,4 @@ export function FruitBackdrop() {
       ))}
     </div>
   );
-}
+});

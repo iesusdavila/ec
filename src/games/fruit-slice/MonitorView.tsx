@@ -7,7 +7,12 @@ import type {
   ObjectKind,
   PlayerCursor,
 } from "@/games/fruit-slice/logic";
-import { CURSOR_FX_MS } from "@/games/fruit-slice/logic";
+import {
+  arcY,
+  CURSOR_FX_MS,
+  OBJECT_LIFETIME_MS,
+  SLICE_LINGER_MS,
+} from "@/games/fruit-slice/logic";
 import { GameStage } from "@/components/GameStage";
 import { FruitBackdrop, FRUIT_SLICE_CSS } from "@/games/fruit-slice/FruitBackdrop";
 import {
@@ -19,9 +24,20 @@ import {
   WatermelonIcon,
 } from "@/components/icons/GameIcons";
 
-const OBJECT_LIFETIME_MS = 2000;
-const SLICE_LINGER_MS = 450;
 const SHAKE_MS = 400;
+const TRAIL_MS = 220;
+
+/**
+ * Tamaños en `cqmin` (1% del lado menor del escenario). El escenario ahora
+ * llena la pantalla, así que su forma varía mucho —muy apaisado con un solo
+ * carril, estrecho y alto con pantalla dividida—. Medir en % del ancho haría
+ * que los objetos fueran enormes en un carril ancho y diminutos en uno
+ * estrecho; `cqmin` los mantiene coherentes en ambos casos.
+ */
+const OBJECT_SIZE = "16cqmin";
+const CURSOR_CORE = "4.6cqmin";
+const CURSOR_RING = "7.4cqmin";
+const CURSOR_HALO = "26cqmin";
 
 const ICONS: Record<ObjectKind, (props: { className?: string }) => ReactElement> = {
   apple: AppleIcon,
@@ -30,11 +46,6 @@ const ICONS: Record<ObjectKind, (props: { className?: string }) => ReactElement>
   banana: BananaIcon,
   bomb: BombIcon,
 };
-
-/** Arco parabólico: sube y vuelve a caer, como un lanzamiento real. */
-function arcHeight(progress: number): number {
-  return 0.85 - 0.6 * Math.sin(progress * Math.PI);
-}
 
 function shakeOffset(now: number, lastBombAt: number | null): number {
   if (lastBombAt === null) return 0;
@@ -60,24 +71,37 @@ export function FruitSliceMonitorView({ state, players }: GameMonitorProps<unkno
   const sharedMode = !fruit.splitScreen && fruit.lanes.some((l) => l.playerIds.length > 1);
 
   return (
-    <div className="flex flex-1 flex-col gap-4 p-6 lg:p-10">
+    <div className="flex min-h-0 flex-1 flex-col gap-2 p-3 lg:gap-3 lg:p-5">
       {/* Keyframes del fondo y del halo del cursor: se inyectan una sola vez. */}
       <style>{FRUIT_SLICE_CSS}</style>
 
-      <div className="flex items-center justify-between">
-        <p className="text-lg font-semibold lg:text-2xl">
-          Apunta con el teléfono y corta · evita las bombas
+      <div className="flex shrink-0 items-center justify-between">
+        <p className="text-base font-semibold lg:text-xl">
+          Apunta con el teléfono y barre para cortar · evita las bombas
         </p>
-        <p className="text-2xl font-mono tabular-nums lg:text-4xl">
-          {Math.ceil(fruit.remainingMs / 1000)}s
-        </p>
+        <div className="flex items-center gap-4">
+          {!fruit.splitScreen &&
+            ranked.map(([id, score]) => (
+              <span key={id} className="flex items-center gap-2 text-base lg:text-xl">
+                <span
+                  className="h-3 w-3 rounded-full lg:h-4 lg:w-4"
+                  style={{ backgroundColor: colorFor(id) }}
+                  aria-hidden
+                />
+                {nameFor(id)}: <span className="font-semibold">{score}</span>
+              </span>
+            ))}
+          <span className="font-mono text-2xl tabular-nums lg:text-4xl">
+            {Math.ceil(fruit.remainingMs / 1000)}s
+          </span>
+        </div>
       </div>
 
-      <div className="flex flex-1 gap-3">
+      <div className="flex min-h-0 flex-1 gap-3">
         {fruit.lanes.map((lane, laneIndex) => (
-          <div key={laneIndex} className="flex flex-1 flex-col gap-2">
+          <div key={laneIndex} className="flex min-h-0 flex-1 flex-col gap-1">
             {fruit.splitScreen && (
-              <div className="flex items-center justify-center gap-2">
+              <div className="flex shrink-0 items-center justify-center gap-2">
                 <span
                   className="h-3 w-3 rounded-full lg:h-4 lg:w-4"
                   style={{ backgroundColor: colorFor(lane.playerIds[0]) }}
@@ -89,36 +113,20 @@ export function FruitSliceMonitorView({ state, players }: GameMonitorProps<unkno
                 </span>
               </div>
             )}
-            <FruitLaneStage
-              lane={lane}
-              laneIndex={laneIndex}
-              now={fruit.now}
-              popups={fruit.popups}
-              cursors={cursorList.filter((c) => c.laneIndex === laneIndex)}
-              players={players}
-              sharedMode={sharedMode}
-            />
+            <div className="min-h-0 flex-1">
+              <FruitLaneStage
+                lane={lane}
+                laneIndex={laneIndex}
+                now={fruit.now}
+                popups={fruit.popups}
+                cursors={cursorList.filter((c) => c.laneIndex === laneIndex)}
+                players={players}
+                sharedMode={sharedMode}
+              />
+            </div>
           </div>
         ))}
       </div>
-
-      {!fruit.splitScreen && (
-        <div className="flex flex-wrap justify-center gap-3">
-          {ranked.map(([id, score]) => (
-            <div
-              key={id}
-              className="flex items-center gap-2 rounded-full bg-surface border border-border px-4 py-2 lg:px-6 lg:py-3 lg:text-lg"
-            >
-              <span
-                className="h-3 w-3 rounded-full lg:h-4 lg:w-4"
-                style={{ backgroundColor: colorFor(id) }}
-                aria-hidden
-              />
-              {nameFor(id)}: <span className="font-semibold">{score}</span>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -144,7 +152,7 @@ function FruitLaneStage({
   const exploding = lane.lastBombAt !== null && now - lane.lastBombAt < SHAKE_MS;
 
   return (
-    <GameStage aspectRatio="4 / 3" className="flex-1" style={{ transform: `translateX(${offset}px)` }}>
+    <GameStage fill style={{ transform: `translateX(${offset}px)` }}>
       <FruitBackdrop />
 
       {exploding && lane.lastBombAt !== null && (
@@ -160,8 +168,7 @@ function FruitLaneStage({
       {lane.objects.map((obj) => {
         const Icon = ICONS[obj.kind];
         const age = obj.sliced ? obj.slicedAt ?? now : now;
-        const progress = Math.min(1, (age - obj.spawnedAt) / OBJECT_LIFETIME_MS);
-        const y = arcHeight(progress);
+        const y = arcY((age - obj.spawnedAt) / OBJECT_LIFETIME_MS);
         const sliceProgress = obj.sliced
           ? Math.min(1, (now - (obj.slicedAt ?? now)) / SLICE_LINGER_MS)
           : 0;
@@ -176,7 +183,7 @@ function FruitLaneStage({
               style={{
                 left: `${obj.x * 100}%`,
                 top: `${y * 100}%`,
-                width: "13%",
+                width: OBJECT_SIZE,
                 aspectRatio: "1 / 1",
                 transform: "translate(-50%, -50%)",
                 opacity: 1 - sliceProgress,
@@ -217,7 +224,7 @@ function FruitLaneStage({
             style={{
               left: `${obj.x * 100}%`,
               top: `${y * 100}%`,
-              width: "13%",
+              width: OBJECT_SIZE,
               aspectRatio: "1 / 1",
               transform: "translate(-50%, -50%)",
             }}
@@ -256,7 +263,7 @@ function FruitLaneStage({
               className="absolute select-none text-2xl font-extrabold lg:text-4xl"
               style={{
                 left: `${popup.x * 100}%`,
-                top: `${popup.y * 100 - progress * 22}%`,
+                top: `${popup.y * 100 - progress * 18}%`,
                 transform: "translate(-50%, -50%)",
                 opacity: 1 - progress,
                 color: popup.amount > 0 ? "#3ECF8E" : "#FF6B5B",
@@ -284,8 +291,9 @@ function FruitLaneStage({
 
 /**
  * El puntero del jugador: un punto rojo grande con un halo de luz alrededor,
- * para que en todo momento se vea a dónde está apuntando su teléfono. Al
- * acertar un corte late un anillo verde; al cortar al aire, uno gris tenue.
+ * para que en todo momento se vea a dónde apunta su teléfono. Deja una estela
+ * cuando barre (que es lo que corta), un anillo verde al acertar y uno gris
+ * al cortar al aire.
  */
 function FruitCursor({
   cursor,
@@ -309,85 +317,113 @@ function FruitCursor({
       ? (now - cursor.lastMissAt) / CURSOR_FX_MS
       : null;
   const ringT = hitT ?? missT;
+  const trail =
+    cursor.trail && now - cursor.trail.at < TRAIL_MS
+      ? { ...cursor.trail, t: (now - cursor.trail.at) / TRAIL_MS }
+      : null;
 
   return (
-    <div
-      className="absolute"
-      style={{
-        left: `${cursor.x * 100}%`,
-        top: `${cursor.y * 100}%`,
-        transform: "translate(-50%, -50%)",
-        zIndex: 6,
-      }}
-    >
-      {/* Halo de iluminación (late suavemente). */}
-      <div
-        className="fruitcursor-halo absolute left-1/2 top-1/2 rounded-full"
-        style={{
-          width: 150,
-          height: 150,
-          transform: "translate(-50%, -50%)",
-          background:
-            "radial-gradient(circle, rgba(255,45,45,0.5) 0%, rgba(255,45,45,0.16) 42%, rgba(255,45,45,0) 72%)",
-          animation: "fruitcursor-pulse 1.6s ease-in-out infinite",
-        }}
-      />
-
-      {/* Anillo de acierto (verde) / fallo (gris). */}
-      {ringT !== null && (
-        <div
-          className="absolute left-1/2 top-1/2 rounded-full"
-          style={{
-            width: 34 + ringT * 66,
-            height: 34 + ringT * 66,
-            transform: "translate(-50%, -50%)",
-            border: `3px solid ${hitT !== null ? "#3ECF8E" : "rgba(255,255,255,0.55)"}`,
-            opacity: 1 - ringT,
-          }}
-        />
-      )}
-
-      {/* Aro con el color del jugador (solo en modo compartido). */}
-      {showLabel && (
-        <div
-          className="absolute left-1/2 top-1/2 rounded-full"
-          style={{
-            width: 44,
-            height: 44,
-            transform: "translate(-50%, -50%)",
-            border: `2px solid ${color}`,
-            opacity: 0.9,
-          }}
-        />
-      )}
-
-      {/* Núcleo rojo. */}
-      <div
-        className="absolute left-1/2 top-1/2 rounded-full"
-        style={{
-          width: 28,
-          height: 28,
-          transform: "translate(-50%, -50%)",
-          backgroundColor: "#FF2E2E",
-          border: "3px solid rgba(255,255,255,0.92)",
-          boxShadow:
-            "0 0 14px 5px rgba(255,45,45,0.85), 0 0 36px 14px rgba(255,45,45,0.45)",
-        }}
-      />
-
-      {showLabel && name && (
-        <div
-          className="absolute left-1/2 whitespace-nowrap text-xs font-semibold lg:text-sm"
-          style={{
-            top: 30,
-            transform: "translateX(-50%)",
-            color,
-            textShadow: "0 1px 4px rgba(0,0,0,0.85)",
-          }}
+    <>
+      {/* Estela del barrido: la línea que efectivamente cortó. */}
+      {trail && (
+        <svg
+          className="pointer-events-none absolute inset-0 h-full w-full"
+          viewBox="0 0 100 100"
+          preserveAspectRatio="none"
+          style={{ opacity: 1 - trail.t, zIndex: 5 }}
+          aria-hidden
         >
-          {name}
-        </div>
+          <line
+            x1={trail.ax * 100}
+            y1={trail.ay * 100}
+            x2={trail.bx * 100}
+            y2={trail.by * 100}
+            stroke="#ffffff"
+            strokeWidth="0.8"
+            strokeLinecap="round"
+            vectorEffect="non-scaling-stroke"
+            style={{ filter: "drop-shadow(0 0 6px rgba(255,80,80,0.9))" }}
+          />
+        </svg>
       )}
-    </div>
+
+      <div
+        className="absolute"
+        style={{
+          left: `${cursor.x * 100}%`,
+          top: `${cursor.y * 100}%`,
+          transform: "translate(-50%, -50%)",
+          zIndex: 6,
+        }}
+      >
+        {/* Halo de iluminación (late suavemente). */}
+        <div
+          className="fruitcursor-halo absolute left-1/2 top-1/2 rounded-full"
+          style={{
+            width: CURSOR_HALO,
+            height: CURSOR_HALO,
+            transform: "translate(-50%, -50%)",
+            background:
+              "radial-gradient(circle, rgba(255,45,45,0.5) 0%, rgba(255,45,45,0.16) 42%, rgba(255,45,45,0) 72%)",
+            animation: "fruitcursor-pulse 1.6s ease-in-out infinite",
+          }}
+        />
+
+        {/* Anillo de acierto (verde) / fallo (gris). */}
+        {ringT !== null && (
+          <div
+            className="absolute left-1/2 top-1/2 rounded-full"
+            style={{
+              width: `calc(${CURSOR_RING} + ${ringT * 14}cqmin)`,
+              height: `calc(${CURSOR_RING} + ${ringT * 14}cqmin)`,
+              transform: "translate(-50%, -50%)",
+              border: `3px solid ${hitT !== null ? "#3ECF8E" : "rgba(255,255,255,0.55)"}`,
+              opacity: 1 - ringT,
+            }}
+          />
+        )}
+
+        {/* Aro con el color del jugador (solo en modo compartido). */}
+        {showLabel && (
+          <div
+            className="absolute left-1/2 top-1/2 rounded-full"
+            style={{
+              width: CURSOR_RING,
+              height: CURSOR_RING,
+              transform: "translate(-50%, -50%)",
+              border: `2px solid ${color}`,
+              opacity: 0.9,
+            }}
+          />
+        )}
+
+        {/* Núcleo rojo. */}
+        <div
+          className="absolute left-1/2 top-1/2 rounded-full"
+          style={{
+            width: CURSOR_CORE,
+            height: CURSOR_CORE,
+            transform: "translate(-50%, -50%)",
+            backgroundColor: "#FF2E2E",
+            border: "3px solid rgba(255,255,255,0.92)",
+            boxShadow: "0 0 14px 5px rgba(255,45,45,0.85), 0 0 36px 14px rgba(255,45,45,0.45)",
+          }}
+        />
+
+        {showLabel && name && (
+          <div
+            className="absolute left-1/2 whitespace-nowrap text-xs font-semibold lg:text-sm"
+            style={{
+              top: `calc(${CURSOR_RING} / 2 + 6px)`,
+              transform: "translateX(-50%)",
+              color,
+              textShadow: "0 1px 4px rgba(0,0,0,0.85)",
+            }}
+          >
+            {name}
+          </div>
+        )}
+      </div>
+    </>
   );
 }

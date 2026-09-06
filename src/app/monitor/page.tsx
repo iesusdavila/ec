@@ -188,8 +188,11 @@ export default function MonitorPage() {
       return <FullscreenMessage title="Juego no encontrado" />;
     }
     return (
-      <main className="min-h-dvh w-full flex flex-col">
-        <header className="flex items-center justify-between px-6 py-4 border-b border-border lg:px-10 lg:py-6">
+      // h-dvh + overflow-hidden: el juego ocupa exactamente el alto de la
+      // ventana. Con min-h-dvh el escenario podía desbordarse por abajo y
+      // obligaba a hacer scroll durante la partida.
+      <main className="h-dvh w-full flex flex-col overflow-hidden">
+        <header className="flex shrink-0 items-center justify-between px-6 py-2 border-b border-border lg:px-10 lg:py-3">
           <span className="font-semibold lg:text-2xl">{selectedGame.name}</span>
           <div className="flex gap-2 lg:gap-3">
             <Button variant="secondary" onClick={handleTogglePause}>
@@ -200,9 +203,10 @@ export default function MonitorPage() {
             </Button>
           </div>
         </header>
-        {/* flex para que la vista del juego ocupe todo el alto disponible:
-            los juegos usan flex-1 y sin esto colapsan a su alto de contenido. */}
-        <div className="relative flex flex-1 flex-col">
+        {/* flex + min-h-0 para que la vista del juego ocupe todo el alto
+            disponible y pueda encogerse: los juegos usan flex-1 y sin min-h-0
+            un hijo flex nunca baja de su alto de contenido. */}
+        <div className="relative flex min-h-0 flex-1 flex-col">
           <GameRuntimeHost
             key={`${selectedGame.id}-${launchToken}`}
             definition={selectedGame}
@@ -239,24 +243,28 @@ export default function MonitorPage() {
 
   return (
     <Screen>
-      <PinDisplay pin={pin} />
-      <PlayerList players={players} maxPlayers={selectedGame?.maxPlayers} />
+      <div className="flex shrink-0 flex-col items-center gap-4 lg:gap-6">
+        <PinDisplay pin={pin} />
+        <PlayerList players={players} maxPlayers={selectedGame?.maxPlayers} />
+      </div>
 
-      <div className="flex flex-col items-center gap-4 w-full lg:gap-6">
-        <p className="text-muted lg:text-xl">Elige un juego</p>
+      {/* Zona elástica: si la ventana es muy baja, es esto lo que se encoge
+          (y como último recurso se desplaza por dentro), en vez de empujar el
+          botón de iniciar fuera de la pantalla. */}
+      <div className="flex w-full min-h-0 flex-1 flex-col items-center gap-3 overflow-y-auto lg:gap-5">
+        <p className="shrink-0 text-muted lg:text-xl">Elige un juego</p>
         <GameGrid
           games={games}
           selectedId={store.selectedGameId}
           playerCount={players.length}
           onSelect={handleSelectGame}
         />
+        {selectedGame && (selectedGame.duration || selectedGame.supportsSplitScreen) ? (
+          <GameOptionsPanel game={selectedGame} options={gameOptions} onChange={setGameOptions} />
+        ) : null}
       </div>
 
-      {selectedGame && (selectedGame.duration || selectedGame.supportsSplitScreen) ? (
-        <GameOptionsPanel game={selectedGame} options={gameOptions} onChange={setGameOptions} />
-      ) : null}
-
-      <div className="flex flex-col items-center gap-2">
+      <div className="flex shrink-0 flex-col items-center gap-2">
         <Button size="xl" disabled={!canStart} onClick={handleStart}>
           Iniciar partida
         </Button>

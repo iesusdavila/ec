@@ -122,7 +122,7 @@ código de los demás.
 | Juego | Jugadores | Control | Configurable antes de iniciar |
 |---|---|---|---|
 | Simón dice | 1–5 | 8 botones en pantalla (N, NE, E, SE, S, SO, O, NO) | Vidas por jugador (1–5) |
-| Corta frutas | 1–3 | Apuntar inclinando el teléfono (mueve un cursor) + tocar la pantalla para cortar en ese punto | Duración (30–120s) y modo compartido / pantalla dividida |
+| Corta frutas | 1–3 | Inclinar el teléfono mueve un puntero en la pantalla; barrerlo sobre una fruta la corta, o se toca el teléfono para cortar en ese punto | Duración (30–120s) y modo compartido / pantalla dividida |
 | Dardos | 1–5 | Mantener presionado + inclinar para apuntar, soltar para lanzar | Tiros por jugador (3–9) |
 | Carrera | 2–5 | Agitar para avanzar, inclinar para cambiar de carril | Duración (30–120s; la pista crece con el tiempo elegido) |
 | Laberinto de equilibrio | 1–4 | Inclinación (orientación / giroscopio) | Duración (30–180s; encadena niveles mientras quede tiempo) |

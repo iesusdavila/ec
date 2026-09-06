@@ -162,16 +162,16 @@ export default function JugadorPage() {
 
   if (inGame) {
     return (
-      <main className="min-h-dvh w-full flex flex-col">
-        <header className="flex items-center justify-between px-4 py-3 border-b border-border">
+      <main className="h-dvh w-full flex flex-col overflow-hidden">
+        <header className="flex shrink-0 items-center justify-between px-4 py-2 border-b border-border">
           <span className="font-medium text-sm">{selectedGame.name}</span>
           <Button variant="ghost" size="md" onClick={handleExit}>
             Salir
           </Button>
         </header>
-        {/* flex para que la vista del juego (que usa flex-1) ocupe todo el
-            alto disponible y quede centrada, no pegada al encabezado. */}
-        <div className="relative flex flex-1 flex-col">
+        {/* flex + min-h-0 para que la vista del juego (que usa flex-1) ocupe
+            todo el alto disponible y quede centrada, no pegada al encabezado. */}
+        <div className="relative flex min-h-0 flex-1 flex-col">
           <GameRuntimePlayer
             definition={selectedGame}
             myId={myId}

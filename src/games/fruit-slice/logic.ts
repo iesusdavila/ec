@@ -2,40 +2,57 @@ import type { GameEngine, GameEngineContext } from "@/games/types";
 import type { GameResult } from "@/core/types";
 
 const BASE_ROUND_MS = 45000;
-const SPAWN_MIN_MS_START = 650;
-const SPAWN_MAX_MS_START = 1100;
-const SPAWN_MIN_MS_END = 350;
-const SPAWN_MAX_MS_END = 650;
-const OBJECT_LIFETIME_MS = 2000;
+const SPAWN_MIN_MS_START = 700;
+const SPAWN_MAX_MS_START = 1150;
+const SPAWN_MIN_MS_END = 420;
+const SPAWN_MAX_MS_END = 750;
+/**
+ * Vida de un objeto = duración completa de su arco. Antes eran 2000 ms, un
+ * ritmo pensado para "agitar el teléfono" (no había que apuntar a nada). Con
+ * puntería real hace falta más tiempo de vuelo: a 2 s el objeto recorría el
+ * arco tan rápido que, con la latencia de red, ya se había movido fuera del
+ * radio de corte antes de que el toque llegara al monitor.
+ */
+export const OBJECT_LIFETIME_MS = 2900;
 /** Cuánto se deja el objeto en pantalla tras ser cortado, para la animación. */
-const SLICE_LINGER_MS = 450;
+export const SLICE_LINGER_MS = 450;
 const POPUP_LIFETIME_MS = 750;
 const BOMB_CHANCE = 0.2;
 const FRUIT_POINTS = 10;
 const BOMB_PENALTY = 10;
 
 /**
- * Radio (en fracción del escenario, 0..1) alrededor del punto al que apunta el
- * teléfono dentro del cual un corte alcanza a un objeto.
+ * Radio (en fracción del escenario) alrededor del punto/trazo del jugador
+ * dentro del cual un corte alcanza a un objeto.
  *
- * ANTES: `handleInput` ignoraba por completo dónde apuntaba el jugador y
- * cortaba "el primer objeto vivo del carril". Si en pantalla había una bomba y
- * una fruta a la vez, agitar el teléfono cortaba lo que hubiera aparecido
- * primero —normalmente la bomba—, sin que el jugador pudiera evitarlo.
- *
- * AHORA: el teléfono funciona como puntero. El jugador mueve un cursor con la
- * inclinación y el corte solo afecta al objeto más cercano a ese cursor y
- * dentro de este radio. Apuntar a la fruta y no a la bomba vuelve a depender
- * del jugador, que es lo que se espera del juego.
+ * El bug original: `handleInput` ignoraba la puntería y cortaba "el primer
+ * objeto vivo del carril", así que una bomba junto a una fruta se cortaba sí o
+ * sí. Ahora todo corte es posicional; este radio es la tolerancia.
  */
-const SLICE_RADIUS = 0.16;
+const SLICE_RADIUS = 0.19;
 /**
- * El escenario tiene relación de aspecto 4/3, así que una misma fracción
- * recorrida en vertical son menos píxeles que en horizontal. Se corrige la
- * distancia en Y por este factor para que la zona de corte sea un círculo real
- * en pantalla y no una elipse.
+ * Compensación de latencia. El jugador reacciona a lo que ve en el monitor,
+ * pero su toque tarda en llegar (teléfono -> Pusher -> monitor). Para no
+ * castigarlo por ese retardo, cada objeto se evalúa también en las posiciones
+ * que ocupaba unos ms antes: si el trazo pasó por donde el jugador lo veía,
+ * cuenta como acierto.
  */
-const STAGE_ASPECT_CORRECTION = 3 / 4;
+const LAG_SAMPLES_MS = [0, 90, 180];
+/**
+ * Velocidad mínima del cursor (fracciones de escenario por segundo) para que
+ * un movimiento cuente como "barrido" que corta. Mover el puntero despacio
+ * para recolocarlo NO corta: así se puede pasar junto a una bomba sin
+ * detonarla, y hace falta un gesto decidido para cortar (como en el juego
+ * clásico de cortar fruta).
+ */
+const SWIPE_MIN_SPEED = 1.0;
+/**
+ * Constante de tiempo del suavizado del cursor en el monitor. El teléfono solo
+ * puede permitirse ~7 mensajes/s (ver PlayerView), así que el monitor recibe
+ * posiciones a saltos; interpolarlas cada frame es lo que hace que el punto
+ * rojo se vea continuo en vez de dar tirones.
+ */
+const CURSOR_EASE_TAU_MS = 55;
 /** Cuánto recuerda el monitor el último acierto/fallo de un cursor (anillo). */
 export const CURSOR_FX_MS = 260;
 
@@ -45,11 +62,12 @@ export type ObjectKind = FruitKind | "bomb";
 
 /**
  * Entrada del jugador:
- * - `aim`: mueve el cursor (se envía de forma continua mientras el jugador
- *   inclina el teléfono).
- * - `slice`: ejecuta un corte EN el punto indicado (un toque en la pantalla
- *   del teléfono). Lleva sus propias coordenadas para no depender de que el
- *   último `aim` haya llegado antes por la red.
+ * - `aim`: nueva posición del puntero. Además de mover el cursor, el tramo
+ *   recorrido desde la posición anterior corta lo que atraviese (si el gesto
+ *   fue lo bastante rápido).
+ * - `slice`: corte explícito en un punto (toque en la pantalla del teléfono).
+ *   Lleva sus propias coordenadas para no depender de que el último `aim` haya
+ *   llegado antes por la red.
  */
 export type FruitSliceInput =
   | { type: "aim"; x: number; y: number }
@@ -78,12 +96,20 @@ export interface PlayerCursor {
   playerId: string;
   /** Índice del carril en el que apunta este jugador. */
   laneIndex: number;
-  x: number; // 0..1 dentro del escenario del carril
-  y: number; // 0..1
-  /** `elapsed` ms del último corte acertado (para el anillo verde del monitor). */
+  /** Posición dibujada: se interpola hacia el objetivo en cada tick. */
+  x: number;
+  y: number;
+  /** Última posición recibida del teléfono (el objetivo real). */
+  targetX: number;
+  targetY: number;
+  /** `elapsed` del último `aim`, para calcular la velocidad del barrido. */
+  lastAimAt: number;
+  /** `elapsed` ms del último corte acertado (anillo verde del monitor). */
   lastHitAt: number | null;
-  /** `elapsed` ms del último corte al aire (sin objeto bajo el cursor). */
+  /** `elapsed` ms del último corte al aire (anillo gris). */
   lastMissAt: number | null;
+  /** Extremos del último trazo que cortó, para dibujar la estela. */
+  trail: { ax: number; ay: number; bx: number; by: number; at: number } | null;
 }
 
 export interface FruitLane {
@@ -117,12 +143,29 @@ function clamp01(v: number): number {
 }
 
 /**
- * Altura del arco parabólico de un objeto en función de su progreso de vida
- * (0..1). Debe coincidir con `arcHeight` de `MonitorView`: si no, el jugador
- * apuntaría a un sitio y el corte se calcularía en otro.
+ * Altura del arco de un objeto según su progreso de vida (0..1).
+ * `MonitorView` importa esta misma función: si el dibujo y el hit-test usaran
+ * fórmulas distintas, el jugador apuntaría a un sitio y se cortaría en otro.
  */
-function arcY(progress: number): number {
-  return 0.85 - 0.6 * Math.sin(progress * Math.PI);
+export function arcY(progress: number): number {
+  return 0.85 - 0.6 * Math.sin(clamp01(progress) * Math.PI);
+}
+
+/** Distancia de un punto al segmento AB (el trazo del puntero). */
+function distanceToSegment(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number
+): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  if (len2 === 0) return Math.hypot(px - ax, py - ay);
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2));
+  return Math.hypot(px - (ax + dx * t), py - (ay + dy * t));
 }
 
 export function createFruitSliceEngine(
@@ -159,8 +202,12 @@ export function createFruitSliceEngine(
           laneIndex: laneIndexOf(p.id),
           x: 0.5,
           y: 0.5,
+          targetX: 0.5,
+          targetY: 0.5,
+          lastAimAt: 0,
           lastHitAt: null,
           lastMissAt: null,
+          trail: null,
         } satisfies PlayerCursor,
       ])
     ),
@@ -189,35 +236,62 @@ export function createFruitSliceEngine(
     nextSpawnAt[laneIndex] = elapsed + min + Math.random() * (max - min);
   }
 
-  /** Posición vertical actual del objeto (misma fórmula que el monitor). */
-  function currentY(o: FallingObject): number {
-    return arcY(Math.min(1, (elapsed - o.spawnedAt) / OBJECT_LIFETIME_MS));
+  function isAlive(o: FallingObject): boolean {
+    return !o.sliced && elapsed - o.spawnedAt < OBJECT_LIFETIME_MS;
+  }
+
+  /** Altura del objeto en un instante dado (para compensar latencia). */
+  function yAt(o: FallingObject, at: number): number {
+    return arcY((at - o.spawnedAt) / OBJECT_LIFETIME_MS);
   }
 
   /**
-   * Objeto vivo más cercano al punto (px, py) del carril, siempre que esté
-   * dentro de `SLICE_RADIUS`. Si hay una bomba y una fruta juntas, gana la que
-   * esté realmente bajo el cursor, no la que apareció antes.
+   * Distancia mínima del objeto al trazo AB, mirando también dónde estaba el
+   * objeto unos ms atrás: el jugador apuntó a lo que veía, no a lo que el
+   * monitor ya había avanzado mientras su toque viajaba por la red.
    */
-  function nearestSliceable(
-    lane: FruitLane,
-    px: number,
-    py: number
-  ): FallingObject | undefined {
-    let best: FallingObject | undefined;
-    let bestDist = SLICE_RADIUS;
-    for (const o of lane.objects) {
-      if (o.sliced) continue;
-      if (elapsed - o.spawnedAt >= OBJECT_LIFETIME_MS) continue;
-      const dx = o.x - px;
-      const dy = (currentY(o) - py) * STAGE_ASPECT_CORRECTION;
-      const dist = Math.hypot(dx, dy);
-      if (dist <= bestDist) {
-        bestDist = dist;
-        best = o;
-      }
+  function distanceToStroke(
+    o: FallingObject,
+    ax: number,
+    ay: number,
+    bx: number,
+    by: number
+  ): number {
+    let best = Infinity;
+    for (const lag of LAG_SAMPLES_MS) {
+      const d = distanceToSegment(o.x, yAt(o, elapsed - lag), ax, ay, bx, by);
+      if (d < best) best = d;
     }
     return best;
+  }
+
+  function registerSlice(
+    playerId: string,
+    cursor: PlayerCursor,
+    lane: FruitLane,
+    laneIndex: number,
+    target: FallingObject,
+    atX: number,
+    atY: number
+  ) {
+    target.sliced = true;
+    target.slicedAt = elapsed;
+    target.slicedBy = playerId;
+    cursor.lastHitAt = elapsed;
+
+    const amount = target.kind === "bomb" ? -BOMB_PENALTY : FRUIT_POINTS;
+    state.scores[playerId] = (state.scores[playerId] ?? 0) + amount;
+    if (target.kind === "bomb") {
+      lane.lastBombAt = elapsed;
+    }
+    state.popups.push({
+      id: nextPopupId++,
+      laneIndex,
+      x: atX,
+      y: atY,
+      amount,
+      spawnedAt: elapsed,
+    });
   }
 
   return {
@@ -232,49 +306,62 @@ export function createFruitSliceEngine(
       if (state.phase !== "playing") return;
       const cursor = state.cursors[playerId];
       if (!cursor) return;
+      const found = laneForPlayer(playerId);
+      if (!found) return;
 
       if (input.type === "aim") {
-        cursor.x = clamp01(input.x);
-        cursor.y = clamp01(input.y);
+        const nx = clamp01(input.x);
+        const ny = clamp01(input.y);
+        const ax = cursor.targetX;
+        const ay = cursor.targetY;
+        const dtMs = Math.max(1, elapsed - cursor.lastAimAt);
+        const dist = Math.hypot(nx - ax, ny - ay);
+        const speed = dist / (dtMs / 1000);
+
+        // Corte por barrido: el tramo recorrido corta todo lo que atraviesa,
+        // siempre que el gesto sea decidido (ver SWIPE_MIN_SPEED).
+        if (speed >= SWIPE_MIN_SPEED) {
+          for (const o of found.lane.objects) {
+            if (!isAlive(o)) continue;
+            if (distanceToStroke(o, ax, ay, nx, ny) <= SLICE_RADIUS) {
+              registerSlice(playerId, cursor, found.lane, found.index, o, o.x, yAt(o, elapsed));
+            }
+          }
+          cursor.trail = { ax, ay, bx: nx, by: ny, at: elapsed };
+        }
+
+        cursor.targetX = nx;
+        cursor.targetY = ny;
+        cursor.lastAimAt = elapsed;
         emit();
         return;
       }
 
-      // input.type === "slice": corte posicional en el punto indicado.
+      // Toque explícito: corta el objeto más cercano al punto señalado.
       const px = clamp01(input.x);
       const py = clamp01(input.y);
-      cursor.x = px;
-      cursor.y = py;
+      cursor.targetX = px;
+      cursor.targetY = py;
 
-      const found = laneForPlayer(playerId);
-      if (!found) return;
+      let best: FallingObject | undefined;
+      let bestDist = SLICE_RADIUS;
+      for (const o of found.lane.objects) {
+        if (!isAlive(o)) continue;
+        const d = distanceToStroke(o, px, py, px, py);
+        if (d <= bestDist) {
+          bestDist = d;
+          best = o;
+        }
+      }
 
-      const target = nearestSliceable(found.lane, px, py);
-      if (!target) {
+      if (!best) {
         // Corte al aire: sin penalización, solo un anillo tenue en el monitor.
         cursor.lastMissAt = elapsed;
         emit();
         return;
       }
 
-      target.sliced = true;
-      target.slicedAt = elapsed;
-      target.slicedBy = playerId;
-      cursor.lastHitAt = elapsed;
-
-      const amount = target.kind === "bomb" ? -BOMB_PENALTY : FRUIT_POINTS;
-      state.scores[playerId] = (state.scores[playerId] ?? 0) + amount;
-      if (target.kind === "bomb") {
-        found.lane.lastBombAt = elapsed;
-      }
-      state.popups.push({
-        id: nextPopupId++,
-        laneIndex: found.index,
-        x: px,
-        y: py,
-        amount,
-        spawnedAt: elapsed,
-      });
+      registerSlice(playerId, cursor, found.lane, found.index, best, px, py);
       emit();
     },
 
@@ -284,12 +371,20 @@ export function createFruitSliceEngine(
       state.now = elapsed;
       state.remainingMs = Math.max(0, durationMs - elapsed);
 
+      // Interpolación del cursor hacia la última posición recibida: convierte
+      // ~7 actualizaciones por segundo en un movimiento continuo en pantalla.
+      const ease = 1 - Math.exp(-dtMs / CURSOR_EASE_TAU_MS);
+      for (const cursor of Object.values(state.cursors)) {
+        cursor.x += (cursor.targetX - cursor.x) * ease;
+        cursor.y += (cursor.targetY - cursor.y) * ease;
+      }
+
       state.lanes.forEach((lane, i) => {
         if (elapsed >= nextSpawnAt[i]) {
           lane.objects.push({
             id: nextId++,
             kind: Math.random() < BOMB_CHANCE ? "bomb" : randomFruitKind(),
-            x: 0.14 + Math.random() * 0.72,
+            x: 0.12 + Math.random() * 0.76,
             spawnedAt: elapsed,
             sliced: false,
             slicedAt: null,

@@ -9,25 +9,45 @@ import type { CSSProperties, ReactNode } from "react";
  * de objetos que maneja cada juego (frutas, un dardo, unos autos), posicionar
  * elementos SVG/DOM reales es igual de fluido y mucho más robusto.
  *
- * `aspectRatio` fija una relación de aspecto por CSS puro, así el tamaño del
- * escenario nunca depende de que un padre flex termine de calcular su alto
- * antes de que midamos nada.
+ * Dos modos de tamaño:
+ *
+ * - Por defecto, `aspectRatio` fija una relación de aspecto por CSS puro, así
+ *   el tamaño del escenario nunca depende de que un padre flex termine de
+ *   calcular su alto antes de que midamos nada.
+ *
+ * - Con `fill`, el escenario ocupa TODO el espacio que le da su contenedor
+ *   (sin relación de aspecto fija). Es lo que necesita un juego que debe
+ *   llenar la pantalla sin provocar scroll: con una relación fija, el alto se
+ *   deriva del ancho y en un monitor apaisado el escenario se desbordaba por
+ *   abajo. Requiere que el contenedor tenga alto definido (cadena de
+ *   `flex-1 min-h-0`). Además declara `container-type: size`, para que los
+ *   objetos de dentro puedan medirse en unidades `cq*` y mantengan un tamaño
+ *   coherente sea cual sea la forma del escenario.
  */
 export function GameStage({
   children,
   aspectRatio = "4 / 3",
+  fill = false,
   className = "",
   style,
 }: {
   children: ReactNode;
   aspectRatio?: string;
+  /** Ocupar todo el contenedor en vez de imponer una relación de aspecto. */
+  fill?: boolean;
   className?: string;
   style?: CSSProperties;
 }) {
   return (
     <div
-      className={`relative w-full max-h-full overflow-hidden rounded-2xl bg-surface ${className}`}
-      style={{ aspectRatio, ...style }}
+      className={`relative overflow-hidden rounded-2xl bg-surface ${
+        fill ? "h-full w-full" : "w-full max-h-full"
+      } ${className}`}
+      style={
+        fill
+          ? { containerType: "size", ...style }
+          : { aspectRatio, ...style }
+      }
     >
       {children}
     </div>

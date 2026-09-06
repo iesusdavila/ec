@@ -108,6 +108,17 @@ dentro de `GameStage` (que fija la relación de aspecto por CSS). Es igual de
 fluido con la cantidad de objetos que manejan y mucho más robusto.
 `GameStage` existe justamente para eso: no volver a canvas.
 
+**Nada hace scroll: todo cabe en el alto de la ventana.** `Screen` y las
+páginas de monitor/jugador usan `h-dvh` + `overflow-hidden` (no `min-h-dvh`),
+y la cadena de contenedores flex lleva `min-h-0` para que los hijos puedan
+encogerse. Sin ese `min-h-0`, un hijo flex nunca baja de su alto de contenido
+y el escenario desbordaba la pantalla. `GameStage` tiene además un modo `fill`
+(usado por Corta frutas) que ocupa todo el contenedor en vez de imponer una
+relación de aspecto: con relación fija, el alto se deriva del ancho y en un
+monitor apaisado se salía por abajo. En modo `fill` el escenario declara
+`container-type: size` y los objetos se miden en `cqmin`, para que su tamaño
+sea coherente lo mismo en un carril ancho que en uno estrecho.
+
 **Los estados de juego se mutan in-place y se re-emiten.** Por eso
 `GameRuntimeHost` guarda el estado en una "caja" (`{ value }`) — si pasara la
 misma referencia a `setState`, React haría bail-out por `Object.is` y el
@@ -163,7 +174,7 @@ añade el selector compartido/dividido (solo lo usa Corta frutas).
 | Juego | Control | Configurable | Verificado en navegador | Probado con sensores reales |
 |---|---|---|---|---|
 | Simón dice | 8 botones táctiles (N…NO) | Vidas 1–5 | Sí | No aplica (ya no usa sensores) |
-| Corta frutas | Apuntar (inclinación) + tocar para cortar | Duración 30–120s + modo | Sí (flujo E2E: monitor+jugador, corte posicional bomba/fruta) | **No** |
+| Corta frutas | Apuntar (inclinación); barrer el puntero o tocar para cortar | Duración 30–120s + modo | Sí (E2E: corte por barrido y por toque, fruta vs bomba, tasa de mensajes, sin scroll) | Sí (ronda 4) |
 | Dardos | Mantener presionado + inclinar, soltar | Tiros 3–9 | Sí | **No** |
 | Carrera | Agitar + inclinar | Duración 30–120s | Parcial | **No** |
 | Laberinto | Inclinar | Duración 30–180s | Sí | **No** |
@@ -180,13 +191,19 @@ Detalles relevantes:
   explosión roja + sacudida al cortar bomba, fruta partida en dos mitades al
   cortarla, y dificultad progresiva (aparecen más rápido con el tiempo).
   - **El teléfono es un puntero, no un sacudidor.** La inclinación mueve un
-    cursor (punto rojo con halo en el monitor, uno por jugador) y un toque en
-    la pantalla del teléfono corta **en ese punto**. Antes `handleInput`
-    ignoraba la puntería y cortaba "el primer objeto vivo del carril", así que
-    una bomba junto a una fruta se cortaba sí o sí. Ahora `logic.ts` hace un
-    hit-test posicional (`nearestSliceable`, `SLICE_RADIUS`) contra el objeto
-    más cercano al cursor, replicando el arco del monitor (`arcY`) para que
-    coincidan lo que se ve y lo que se corta.
+    cursor (punto rojo con halo en el monitor, uno por jugador). Se corta de
+    dos formas: **barriendo** el puntero por encima de un objeto, o **tocando**
+    la pantalla del teléfono para cortar en el punto exacto. Antes
+    `handleInput` ignoraba la puntería y cortaba "el primer objeto vivo del
+    carril", así que una bomba junto a una fruta se cortaba sí o sí. Ahora
+    `logic.ts` hace un hit-test posicional contra el trazo del puntero
+    (distancia punto-segmento, `SLICE_RADIUS`), replicando el arco del monitor
+    (`arcY`, importado por `MonitorView` para que no puedan divergir).
+  - El barrido solo corta si el gesto es rápido (`SWIPE_MIN_SPEED`): así se
+    puede recolocar el puntero despacio junto a una bomba sin detonarla, y
+    hace falta un gesto decidido para cortar.
+  - Toda la pantalla del teléfono es el botón de cortar: apuntar con una mano
+    y acertar un botón pequeño con la otra era innecesariamente difícil.
   - Por eso ahora `requiredSensors: ["orientation"]` y `needsCalibration: true`
     (el punto neutro calibrado = centro de la pantalla). El motor tipa su
     entrada como `FruitSliceInput` (`{type:"aim"}` / `{type:"slice"}`).
@@ -277,6 +294,29 @@ Si en el teléfono un juego se siente demasiado sensible o demasiado sordo,
    partido en `page.tsx` (servidor, hace el `notFound()` en producción) y
    `SensorDebugClient.tsx`.
 4. **`npm run lint` y `npm run build` deben quedar limpios.** Ambos pasan hoy.
+5. **Pusher limita los eventos de cliente a 10 por segundo y por conexión.**
+   Esta es la trampa más cara hasta ahora, porque **falla en silencio**: al
+   pasarse, Pusher descarta los mensajes sobrantes y `channel.trigger()` sigue
+   devolviendo `true`, así que no hay ni error ni aviso en consola.
+
+   Le pasó a Corta frutas: el teléfono enviaba la posición del puntero cada
+   50 ms (20 msg/s, el doble del límite) y el resultado en un móvil real fue
+   que **el puntero se movía a trompicones y el juego no cortaba nada**, porque
+   el mensaje de corte era justo el que se perdía en el descarte.
+
+   Regla para cualquier control continuo que se añada a otro juego: **muestrea
+   rápido en local, pero envía como mucho ~7 veces por segundo** (throttle con
+   envío de cola, ver `core/utils/throttle.ts`) y deja el resto del presupuesto
+   para los eventos discretos (toques, disparos), que nunca deben ir limitados.
+   Para que 7/s no se vea a saltos, interpola en el monitor en vez de subir la
+   frecuencia de envío (`CURSOR_EASE_TAU_MS` en `fruit-slice/logic.ts`).
+
+   Nota: el host también emite por encima del límite (`BROADCAST_INTERVAL_MS`
+   70 ms ≈ 14/s + heartbeat + estado de sesión). No causa los síntomas de
+   arriba porque el monitor pinta desde su propio estado local, no desde el
+   broadcast, pero **es deuda real**: los teléfonos reciben menos snapshots de
+   los que se creen. Si algún juego llega a depender de lo que el teléfono
+   pinta, hay que bajar esa frecuencia.
 
 ---
 
@@ -339,6 +379,19 @@ Ronda 3 (solo Corta frutas):
 | El teléfono no apunta a un punto: corta lo que salga y siempre revienta la bomba | Hecho: corte posicional. El teléfono mueve un cursor por inclinación y el toque corta el objeto bajo ese cursor (`nearestSliceable` en `logic.ts`). Verificado E2E: apuntar a la fruta con una bomba en pantalla corta la fruta (+10); tener el reticle sobre la bomba la corta (−10). |
 | Poner un cursor visible de dónde apunta | Hecho: punto rojo grande con halo de luz que late, uno por jugador (`FruitCursor` en `MonitorView`). Anillo verde al acertar, gris al cortar al aire. En modo compartido, aro del color del jugador + nombre. |
 | Fondo neutro de mariposas, oscuro, que no se confunda con frutas/bombas | Hecho: `FruitBackdrop.tsx` (cielo nocturno + mariposas frías desaturadas, animación CSS, respeta `prefers-reduced-motion`). Objetos con "plato" + `drop-shadow` para seguir legibles sobre el fondo oscuro. |
+
+Ronda 4 (probando en teléfono real, por fin):
+
+| Pedido | Estado |
+|---|---|
+| No corta nada, pase por donde pase | Hecho. Causa raíz: se enviaban 20 posiciones/s y **Pusher descarta por encima de 10/s en silencio**, así que el mensaje de corte se perdía (ver §7.5). Ahora el envío va limitado a ~7/s y el corte va aparte, sin limitar. Medido en navegador: **7,44 msg/s**. Además se añadió corte por barrido: pasar el puntero por encima de una fruta la corta, sin necesidad de tocar nada. |
+| El mouse desde el teléfono va lentísimo | Hecho, misma causa raíz. Encima: el muestreo local subió a ~31/s (el punto del teléfono se siente inmediato), el monitor interpola entre posiciones (`CURSOR_EASE_TAU_MS`) para que ~7/s se vea continuo, y `FruitBackdrop` va `memo` — antes React reconciliaba el cielo entero 60 veces por segundo para nada. |
+| Que el juego y el inicio ocupen el 100% del alto, sin scroll | Hecho: `Screen` y las páginas de monitor/jugador pasan de `min-h-dvh` a `h-dvh` + `overflow-hidden`, con `min-h-0` en toda la cadena flex. `GameStage` gana modo `fill` (ocupa el contenedor, sin relación de aspecto fija) y los objetos se miden en `cqmin`. Verificado: `scrollHeight === innerHeight` en inicio, menú del monitor, monitor en partida y teléfono en partida. |
+
+Toques de mecánica que vinieron con lo anterior: los objetos vuelan más lento
+(`OBJECT_LIFETIME_MS` 2000 → 2900, hacía falta tiempo para apuntar), el radio
+de corte subió a `0.19`, y el hit-test compensa la latencia de red evaluando
+también dónde estaba el objeto 90 y 180 ms antes (`LAG_SAMPLES_MS`).
 
 ---
 
