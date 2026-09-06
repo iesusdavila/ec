@@ -181,11 +181,11 @@ function FruitLaneStage({
               data-obj-kind={obj.kind}
               data-obj-sliced="true"
               style={{
-                left: `${obj.x * 100}%`,
-                top: `${y * 100}%`,
+                left: 0,
+                top: 0,
                 width: OBJECT_SIZE,
                 aspectRatio: "1 / 1",
-                transform: "translate(-50%, -50%)",
+                transform: `translate3d(calc(${obj.x} * 100cqw - 50%), calc(${y} * 100cqh - 50%), 0)`,
                 opacity: 1 - sliceProgress,
               }}
             >
@@ -222,11 +222,14 @@ function FruitLaneStage({
             data-obj-kind={obj.kind}
             data-obj-sliced="false"
             style={{
-              left: `${obj.x * 100}%`,
-              top: `${y * 100}%`,
+              left: 0,
+              top: 0,
               width: OBJECT_SIZE,
               aspectRatio: "1 / 1",
-              transform: "translate(-50%, -50%)",
+              // Igual que el cursor: `transform` en vez de `left`/`top` para
+              // que el movimiento lo resuelva el compositor, no el layout.
+              transform: `translate3d(calc(${obj.x} * 100cqw - 50%), calc(${y} * 100cqh - 50%), 0)`,
+              willChange: "transform",
             }}
           >
             {/* Plato tenue: asienta el objeto sobre el fondo oscuro sin teñirlo. */}
@@ -262,9 +265,11 @@ function FruitLaneStage({
               key={popup.id}
               className="absolute select-none text-2xl font-extrabold lg:text-4xl"
               style={{
-                left: `${popup.x * 100}%`,
-                top: `${popup.y * 100 - progress * 18}%`,
-                transform: "translate(-50%, -50%)",
+                left: 0,
+                top: 0,
+                transform: `translate3d(calc(${popup.x} * 100cqw - 50%), calc(${
+                  popup.y - progress * 0.18
+                } * 100cqh - 50%), 0)`,
                 opacity: 1 - progress,
                 color: popup.amount > 0 ? "#3ECF8E" : "#FF6B5B",
                 textShadow: "0 2px 8px rgba(0,0,0,0.6)",
@@ -347,12 +352,24 @@ function FruitCursor({
         </svg>
       )}
 
+      {/*
+        Posicionado con `transform` en vez de `left`/`top`: el cursor se mueve
+        en cada frame y animar `left`/`top` obliga al navegador a recalcular
+        layout 60 veces por segundo, mientras que un `translate3d` lo resuelve
+        el compositor en la GPU. Es la diferencia entre un puntero fluido y uno
+        con micro-tirones. `cqw`/`cqh` son el ancho/alto del escenario (que
+        declara `container-type: size`), así que la fracción 0..1 se convierte
+        en píxeles sin tener que medir nada desde React. El div no tiene tamaño
+        propio —sus hijos son absolutos—, así que actúa como un punto de anclaje.
+      */}
       <div
         className="absolute"
+        data-cursor={cursor.playerId}
         style={{
-          left: `${cursor.x * 100}%`,
-          top: `${cursor.y * 100}%`,
-          transform: "translate(-50%, -50%)",
+          left: 0,
+          top: 0,
+          transform: `translate3d(calc(${cursor.x} * 100cqw), calc(${cursor.y} * 100cqh), 0)`,
+          willChange: "transform",
           zIndex: 6,
         }}
       >

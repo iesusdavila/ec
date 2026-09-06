@@ -34,17 +34,30 @@ import type { FruitSliceInput } from "@/games/fruit-slice/logic";
 
 // Grados de inclinación (respecto al punto calibrado) para llegar al borde.
 const AIM_RANGE_DEG = 24;
-// Muestreo local: solo mueve el punto de vista previa del teléfono.
+// Muestreo local: mueve la vista previa del teléfono y mide la velocidad.
 const AIM_SAMPLE_MS = 32;
-// Envío real por la red. ~7/s, con margen para los toques.
-const AIM_SEND_MS = 140;
+// Envío real por la red. ~8/s, con margen para los toques bajo el límite de 10.
+const AIM_SEND_MS = 120;
 // Suavizado exponencial: 1 = crudo (nervioso), cerca de 0 = muy lento.
-const AIM_SMOOTHING = 0.55;
+const AIM_SMOOTHING = 0.6;
+/**
+ * Suavizado de la velocidad que se manda al monitor. Va aparte y más suave que
+ * el de la posición: la velocidad se deriva de diferencias entre muestras, así
+ * que amplifica el ruido del sensor, y un pico de velocidad se convierte en un
+ * salto visible al extrapolar en el monitor.
+ */
+const VEL_SMOOTHING = 0.3;
+/** Tope de velocidad reportada (fracciones de escenario por segundo). */
+const MAX_VEL = 4;
 // Desplazamiento mínimo para molestarse en enviar.
 const AIM_MIN_DELTA = 0.004;
 
 function clamp01(v: number): number {
   return Math.max(0, Math.min(1, v));
+}
+
+function clampVel(v: number): number {
+  return Math.max(-MAX_VEL, Math.min(MAX_VEL, v));
 }
 
 export function FruitSlicePlayerView({ sendInput }: GamePlayerProps<FruitSliceInput>) {
@@ -61,6 +74,7 @@ export function FruitSlicePlayerView({ sendInput }: GamePlayerProps<FruitSliceIn
   // Posición filtrada del cursor y última enviada. En refs porque solo se tocan
   // dentro de un intervalo y de manejadores de eventos, nunca en render.
   const aimRef = useRef({ x: 0.5, y: 0.5 });
+  const velRef = useRef({ x: 0, y: 0 });
   const sentRef = useRef({ x: 0.5, y: 0.5 });
   const [preview, setPreview] = useState({ x: 0.5, y: 0.5 });
   const [flash, setFlash] = useState(false);
@@ -71,11 +85,17 @@ export function FruitSlicePlayerView({ sendInput }: GamePlayerProps<FruitSliceIn
     // hecho, hacerlo puede leer un valor obsoleto. Con deps [] la instancia
     // vive lo mismo que el componente. Envío de cola: la última posición
     // siempre acaba saliendo aunque la mano se pare entre dos ventanas.
-    const sendAim = throttle((x: number, y: number) => {
-      sendRef.current({ type: "aim", x, y });
+    const sendAim = throttle((x: number, y: number, vx: number, vy: number) => {
+      sendRef.current({ type: "aim", x, y, vx, vy });
     }, AIM_SEND_MS);
 
+    let lastAt = performance.now();
+
     const id = setInterval(() => {
+      const now = performance.now();
+      const dtS = Math.max(0.001, (now - lastAt) / 1000);
+      lastAt = now;
+
       const { beta, gamma } = sensorService.getTilt();
       // gamma (giro izquierda/derecha) -> eje X.
       // beta (adelante/atrás) -> eje Y, con signo negativo: inclinar el borde
@@ -84,11 +104,22 @@ export function FruitSlicePlayerView({ sendInput }: GamePlayerProps<FruitSliceIn
       const targetX = clamp01(0.5 + gamma / AIM_RANGE_DEG / 2);
       const targetY = clamp01(0.5 - beta / AIM_RANGE_DEG / 2);
 
+      const prev = aimRef.current;
       const next = {
-        x: aimRef.current.x + (targetX - aimRef.current.x) * AIM_SMOOTHING,
-        y: aimRef.current.y + (targetY - aimRef.current.y) * AIM_SMOOTHING,
+        x: prev.x + (targetX - prev.x) * AIM_SMOOTHING,
+        y: prev.y + (targetY - prev.y) * AIM_SMOOTHING,
       };
       aimRef.current = next;
+
+      // Velocidad instantánea, suavizada y acotada. Viaja con cada posición
+      // para que el monitor pueda seguir moviendo el cursor entre mensajes.
+      const rawVX = (next.x - prev.x) / dtS;
+      const rawVY = (next.y - prev.y) / dtS;
+      velRef.current = {
+        x: clampVel(velRef.current.x + (rawVX - velRef.current.x) * VEL_SMOOTHING),
+        y: clampVel(velRef.current.y + (rawVY - velRef.current.y) * VEL_SMOOTHING),
+      };
+
       // La vista previa local se refresca siempre: en el teléfono el punto
       // debe sentirse inmediato aunque el envío vaya limitado.
       setPreview(next);
@@ -98,7 +129,7 @@ export function FruitSlicePlayerView({ sendInput }: GamePlayerProps<FruitSliceIn
         Math.abs(next.y - sentRef.current.y) > AIM_MIN_DELTA
       ) {
         sentRef.current = next;
-        sendAim(next.x, next.y);
+        sendAim(next.x, next.y, velRef.current.x, velRef.current.y);
       }
     }, AIM_SAMPLE_MS);
     return () => clearInterval(id);

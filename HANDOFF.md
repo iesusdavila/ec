@@ -305,11 +305,30 @@ Si en el teléfono un juego se siente demasiado sensible o demasiado sordo,
    el mensaje de corte era justo el que se perdía en el descarte.
 
    Regla para cualquier control continuo que se añada a otro juego: **muestrea
-   rápido en local, pero envía como mucho ~7 veces por segundo** (throttle con
+   rápido en local, pero envía como mucho ~8 veces por segundo** (throttle con
    envío de cola, ver `core/utils/throttle.ts`) y deja el resto del presupuesto
    para los eventos discretos (toques, disparos), que nunca deben ir limitados.
-   Para que 7/s no se vea a saltos, interpola en el monitor en vez de subir la
-   frecuencia de envío (`CURSOR_EASE_TAU_MS` en `fruit-slice/logic.ts`).
+   **Y para que ~8/s no se vea a tirones, extrapola; no basta con interpolar.**
+   Interpolar hacia la última posición recibida deja el cursor siempre por
+   detrás, porque persigue un punto que ya es viejo: se ve lento por mucho que
+   se afine el suavizado. Lo que funciona es que el teléfono mande también su
+   VELOCIDAD y el monitor avance el cursor por su cuenta entre mensajes
+   (`MAX_EXTRAPOLATION_MS` + `CURSOR_EASE_TAU_MS` en `fruit-slice/logic.ts`),
+   con un tope para que no se escape si dejan de llegar mensajes.
+
+   Medido en navegador con el mismo gesto y la misma tasa de envío (~8,5 msg/s),
+   comparando el salto del percentil 95 contra el salto típico por frame:
+
+   | | paso mediano | p95 | p95/mediano |
+   |---|---|---|---|
+   | Solo interpolando | 0,0040 | 0,0267 | **6,6×** (avanza a rachas) |
+   | Con extrapolación | 0,0085 | 0,0192 | **2,3×** (paso casi uniforme) |
+
+   Tercera pata: **posiciona con `transform: translate3d`, no con `left`/`top`**.
+   Animar `left`/`top` recalcula layout 60 veces por segundo; un `translate3d`
+   lo resuelve el compositor. En modo `fill` el escenario declara
+   `container-type: size`, así que `calc(fracción * 100cqw)` convierte las
+   coordenadas 0..1 en píxeles sin medir nada desde React.
 
    Nota: el host también emite por encima del límite (`BROADCAST_INTERVAL_MS`
    70 ms ≈ 14/s + heartbeat + estado de sesión). No causa los síntomas de
@@ -387,6 +406,12 @@ Ronda 4 (probando en teléfono real, por fin):
 | No corta nada, pase por donde pase | Hecho. Causa raíz: se enviaban 20 posiciones/s y **Pusher descarta por encima de 10/s en silencio**, así que el mensaje de corte se perdía (ver §7.5). Ahora el envío va limitado a ~7/s y el corte va aparte, sin limitar. Medido en navegador: **7,44 msg/s**. Además se añadió corte por barrido: pasar el puntero por encima de una fruta la corta, sin necesidad de tocar nada. |
 | El mouse desde el teléfono va lentísimo | Hecho, misma causa raíz. Encima: el muestreo local subió a ~31/s (el punto del teléfono se siente inmediato), el monitor interpola entre posiciones (`CURSOR_EASE_TAU_MS`) para que ~7/s se vea continuo, y `FruitBackdrop` va `memo` — antes React reconciliaba el cielo entero 60 veces por segundo para nada. |
 | Que el juego y el inicio ocupen el 100% del alto, sin scroll | Hecho: `Screen` y las páginas de monitor/jugador pasan de `min-h-dvh` a `h-dvh` + `overflow-hidden`, con `min-h-0` en toda la cadena flex. `GameStage` gana modo `fill` (ocupa el contenedor, sin relación de aspecto fija) y los objetos se miden en `cqmin`. Verificado: `scrollHeight === innerHeight` en inicio, menú del monitor, monitor en partida y teléfono en partida. |
+
+Ronda 5:
+
+| Pedido | Estado |
+|---|---|
+| El puntero aún no se ve fluido, súbele la velocidad | Hecho, pero **no subiendo la frecuencia de envío** (el techo son 10 msg/s de Pusher y ya íbamos a 7). Se añadió extrapolación: el teléfono manda su velocidad junto a la posición y el monitor avanza el cursor solo entre mensajes, así que se dibuja donde la mano está ahora y no donde estaba hace 120 ms. Además el envío subió de 140 a 120 ms (~8,4 msg/s medidos) y todo lo que se mueve pasó a posicionarse con `translate3d` en vez de `left`/`top`. Medido: el salto p95 respecto al paso típico bajó de **6,6× a 2,3×**, a 60 fps y con 5% de frames parados. Ver §7.5. |
 
 Toques de mecánica que vinieron con lo anterior: los objetos vuelan más lento
 (`OBJECT_LIFETIME_MS` 2000 → 2900, hacía falta tiempo para apuntar), el radio

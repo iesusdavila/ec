@@ -47,12 +47,32 @@ const LAG_SAMPLES_MS = [0, 90, 180];
  */
 const SWIPE_MIN_SPEED = 1.0;
 /**
- * Constante de tiempo del suavizado del cursor en el monitor. El teléfono solo
- * puede permitirse ~7 mensajes/s (ver PlayerView), así que el monitor recibe
- * posiciones a saltos; interpolarlas cada frame es lo que hace que el punto
- * rojo se vea continuo en vez de dar tirones.
+ * Constante de tiempo del suavizado del cursor en el monitor.
+ *
+ * Ojo con bajarla o subirla a lo tonto: ya NO es lo que da la sensación de
+ * fluidez (de eso se encarga la extrapolación de abajo), solo absorbe el
+ * salto cuando llega una posición nueva y la predicción se había desviado un
+ * poco. Un valor pequeño = más nervioso pero más pegado a la mano.
  */
-const CURSOR_EASE_TAU_MS = 55;
+const CURSOR_EASE_TAU_MS = 38;
+/**
+ * Extrapolación ("dead reckoning"), que es lo que hace que el puntero se vea
+ * fluido con solo ~8 mensajes por segundo.
+ *
+ * Interpolar hacia la última posición recibida tiene un techo: el cursor
+ * SIEMPRE va por detrás, porque persigue un punto que ya es viejo. Por eso
+ * subir la frecuencia de envío se sentía como la única salida... y no se puede,
+ * Pusher corta a 10 msg/s (§7.5 del HANDOFF).
+ *
+ * La solución es la de cualquier juego en red: el teléfono manda también su
+ * VELOCIDAD, y el monitor avanza el cursor por su cuenta entre mensaje y
+ * mensaje. Así el punto se dibuja donde la mano está AHORA, no donde estaba
+ * hace 120 ms, y se ve continuo sin gastar un solo mensaje más.
+ *
+ * El tope evita que, si los mensajes dejan de llegar (red o mano parada), el
+ * cursor siga viajando solo hasta el borde.
+ */
+const MAX_EXTRAPOLATION_MS = 200;
 /** Cuánto recuerda el monitor el último acierto/fallo de un cursor (anillo). */
 export const CURSOR_FX_MS = 260;
 
@@ -70,7 +90,9 @@ export type ObjectKind = FruitKind | "bomb";
  *   llegado antes por la red.
  */
 export type FruitSliceInput =
-  | { type: "aim"; x: number; y: number }
+  /** `vx`/`vy`: velocidad en fracciones de escenario por segundo, para que el
+   *  monitor pueda extrapolar entre mensajes (ver MAX_EXTRAPOLATION_MS). */
+  | { type: "aim"; x: number; y: number; vx: number; vy: number }
   | { type: "slice"; x: number; y: number };
 
 export interface FallingObject {
@@ -102,7 +124,10 @@ export interface PlayerCursor {
   /** Última posición recibida del teléfono (el objetivo real). */
   targetX: number;
   targetY: number;
-  /** `elapsed` del último `aim`, para calcular la velocidad del barrido. */
+  /** Velocidad reportada por el teléfono, en fracciones por segundo. */
+  velX: number;
+  velY: number;
+  /** `elapsed` del último `aim`: edad de la muestra y velocidad del barrido. */
   lastAimAt: number;
   /** `elapsed` ms del último corte acertado (anillo verde del monitor). */
   lastHitAt: number | null;
@@ -204,6 +229,8 @@ export function createFruitSliceEngine(
           y: 0.5,
           targetX: 0.5,
           targetY: 0.5,
+          velX: 0,
+          velY: 0,
           lastAimAt: 0,
           lastHitAt: null,
           lastMissAt: null,
@@ -332,6 +359,8 @@ export function createFruitSliceEngine(
 
         cursor.targetX = nx;
         cursor.targetY = ny;
+        cursor.velX = input.vx ?? 0;
+        cursor.velY = input.vy ?? 0;
         cursor.lastAimAt = elapsed;
         emit();
         return;
@@ -371,12 +400,18 @@ export function createFruitSliceEngine(
       state.now = elapsed;
       state.remainingMs = Math.max(0, durationMs - elapsed);
 
-      // Interpolación del cursor hacia la última posición recibida: convierte
-      // ~7 actualizaciones por segundo en un movimiento continuo en pantalla.
+      // Cursor: se predice dónde está la mano ahora (última posición conocida
+      // + velocidad × tiempo transcurrido desde esa muestra) y se suaviza el
+      // acercamiento. Esto es lo que convierte ~8 mensajes por segundo en un
+      // movimiento que se ve continuo y pegado a la mano.
       const ease = 1 - Math.exp(-dtMs / CURSOR_EASE_TAU_MS);
       for (const cursor of Object.values(state.cursors)) {
-        cursor.x += (cursor.targetX - cursor.x) * ease;
-        cursor.y += (cursor.targetY - cursor.y) * ease;
+        const ageMs = Math.min(MAX_EXTRAPOLATION_MS, Math.max(0, elapsed - cursor.lastAimAt));
+        const aheadS = ageMs / 1000;
+        const predictedX = clamp01(cursor.targetX + cursor.velX * aheadS);
+        const predictedY = clamp01(cursor.targetY + cursor.velY * aheadS);
+        cursor.x += (predictedX - cursor.x) * ease;
+        cursor.y += (predictedY - cursor.y) * ease;
       }
 
       state.lanes.forEach((lane, i) => {
