@@ -8,7 +8,7 @@ export interface BalanceInput {
   betaDeg: number;
 }
 
-const MATCH_DURATION_MS = 45000;
+const BASE_DURATION_MS = 45000;
 const BALL_RADIUS = 14;
 const MAX_ACCEL = 2200; // unidades de mundo por s^2 con inclinación máxima
 const MAX_TILT_DEG = 30;
@@ -22,13 +22,15 @@ interface BalancePlayerState {
   vy: number;
   tiltX: number;
   tiltY: number;
-  finished: boolean;
-  finishTimeMs: number | null;
+  /** Ya llegó a la meta del nivel actual y espera a que los demás lleguen. */
+  reachedGoal: boolean;
+  levelsCompleted: number;
 }
 
 export interface BalanceState {
   phase: "playing" | "gameover";
   levelName: string;
+  levelsCompleted: number;
   walls: Rect[];
   hazards: Rect[];
   goal: { x: number; y: number; r: number };
@@ -82,16 +84,19 @@ function overlapsRect(x: number, y: number, rect: Rect): boolean {
 }
 
 export function createBalanceMazeEngine(context: GameEngineContext): GameEngine<BalanceInput> {
-  const level = LEVELS[nextLevelIndex() % LEVELS.length];
+  const durationMs = context.options.roundValue * 1000 || BASE_DURATION_MS;
+  let levelCursor = nextLevelIndex();
+  let level = LEVELS[levelCursor % LEVELS.length];
 
   const state: BalanceState = {
     phase: "playing",
     levelName: level.name,
+    levelsCompleted: 0,
     walls: level.walls,
     hazards: level.hazards,
     goal: level.goal,
     elapsedMs: 0,
-    remainingMs: MATCH_DURATION_MS,
+    remainingMs: durationMs,
     players: context.players.map((p) => ({
       id: p.id,
       x: level.start.x,
@@ -100,13 +105,31 @@ export function createBalanceMazeEngine(context: GameEngineContext): GameEngine<
       vy: 0,
       tiltX: 0,
       tiltY: 0,
-      finished: false,
-      finishTimeMs: null,
+      reachedGoal: false,
+      levelsCompleted: 0,
     })),
   };
 
   function emit() {
     context.onStateChange(state);
+  }
+
+  function advanceLevel() {
+    levelCursor += 1;
+    level = LEVELS[levelCursor % LEVELS.length];
+    state.levelName = level.name;
+    state.walls = level.walls;
+    state.hazards = level.hazards;
+    state.goal = level.goal;
+    for (const player of state.players) {
+      player.levelsCompleted += 1;
+      player.x = level.start.x;
+      player.y = level.start.y;
+      player.vx = 0;
+      player.vy = 0;
+      player.reachedGoal = false;
+    }
+    state.levelsCompleted += 1;
   }
 
   return {
@@ -116,7 +139,7 @@ export function createBalanceMazeEngine(context: GameEngineContext): GameEngine<
 
     handleInput: (playerId, input) => {
       const player = state.players.find((p) => p.id === playerId);
-      if (!player || player.finished) return;
+      if (!player || player.reachedGoal) return;
       player.tiltX = Math.max(-MAX_TILT_DEG, Math.min(MAX_TILT_DEG, input.gammaDeg)) / MAX_TILT_DEG;
       player.tiltY = Math.max(-MAX_TILT_DEG, Math.min(MAX_TILT_DEG, input.betaDeg)) / MAX_TILT_DEG;
     },
@@ -125,10 +148,10 @@ export function createBalanceMazeEngine(context: GameEngineContext): GameEngine<
       if (state.phase !== "playing") return;
       const dt = dtMs / 1000;
       state.elapsedMs += dtMs;
-      state.remainingMs = Math.max(0, MATCH_DURATION_MS - state.elapsedMs);
+      state.remainingMs = Math.max(0, durationMs - state.elapsedMs);
 
       for (const player of state.players) {
-        if (player.finished) continue;
+        if (player.reachedGoal) continue;
 
         player.vx += player.tiltX * MAX_ACCEL * dt;
         player.vy += player.tiltY * MAX_ACCEL * dt;
@@ -161,13 +184,15 @@ export function createBalanceMazeEngine(context: GameEngineContext): GameEngine<
         const dxGoal = player.x - state.goal.x;
         const dyGoal = player.y - state.goal.y;
         if (Math.sqrt(dxGoal * dxGoal + dyGoal * dyGoal) < state.goal.r) {
-          player.finished = true;
-          player.finishTimeMs = state.elapsedMs;
+          player.reachedGoal = true;
         }
       }
 
-      const allFinished = state.players.every((p) => p.finished);
-      if (allFinished || state.remainingMs <= 0) {
+      if (state.players.every((p) => p.reachedGoal)) {
+        advanceLevel();
+      }
+
+      if (state.remainingMs <= 0) {
         state.phase = "gameover";
       }
       emit();
@@ -177,22 +202,17 @@ export function createBalanceMazeEngine(context: GameEngineContext): GameEngine<
 
     getResult: (): GameResult => {
       const ranking = [...state.players].sort((a, b) => {
-        if (a.finished !== b.finished) return a.finished ? -1 : 1;
-        if (a.finished && b.finished) return (a.finishTimeMs ?? 0) - (b.finishTimeMs ?? 0);
+        if (b.levelsCompleted !== a.levelsCompleted) return b.levelsCompleted - a.levelsCompleted;
+        if (a.reachedGoal !== b.reachedGoal) return a.reachedGoal ? -1 : 1;
         const distA = Math.hypot(a.x - state.goal.x, a.y - state.goal.y);
         const distB = Math.hypot(b.x - state.goal.x, b.y - state.goal.y);
         return distA - distB;
       });
-      const scores = Object.fromEntries(
-        state.players.map((p) => [
-          p.id,
-          p.finished ? Math.max(1, Math.round((MATCH_DURATION_MS - (p.finishTimeMs ?? 0)) / 100)) : 0,
-        ])
-      );
+      const scores = Object.fromEntries(state.players.map((p) => [p.id, p.levelsCompleted]));
       return {
         ranking: ranking.map((p) => p.id),
         scores,
-        winnerId: ranking[0]?.finished ? ranking[0].id : null,
+        winnerId: ranking[0]?.id ?? null,
       };
     },
 

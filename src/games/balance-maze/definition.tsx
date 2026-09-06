@@ -12,6 +12,7 @@ export const balanceMazeDefinition: GameDefinition<BalanceInput> = {
   maxPlayers: 4,
   requiredSensors: ["orientation", "gyroscope"],
   needsCalibration: true,
+  duration: { min: 30, max: 180, default: 60, step: 30, unit: "seconds" },
   Thumbnail: BalanceMazeThumbnail,
   MonitorComponent: BalanceMazeMonitorView,
   PlayerComponent: BalanceMazePlayerView,

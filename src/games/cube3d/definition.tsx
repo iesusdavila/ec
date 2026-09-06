@@ -12,6 +12,7 @@ export const cube3dDefinition: GameDefinition<Cube3dInput> = {
   maxPlayers: 2,
   requiredSensors: ["orientation"],
   needsCalibration: true,
+  duration: { min: 20, max: 90, default: 30, step: 10, unit: "seconds" },
   Thumbnail: Cube3dThumbnail,
   MonitorComponent: Cube3dMonitorView,
   PlayerComponent: Cube3dPlayerView,

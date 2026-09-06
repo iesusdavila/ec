@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import type { GameMonitorProps } from "@/games/types";
+import { Button } from "@/components/Button";
 import { CUBE_HALF, GOAL, OBSTACLE, PLATFORM_HALF, type Cube3dState } from "@/games/cube3d/logic";
 
 interface SceneRefs {
@@ -30,12 +31,17 @@ function isWebGLAvailable(): boolean {
  * se ve siempre igual sin depender de calibrar luces (ver README sección 19,
  * "evitar iluminación compleja") y sin riesgo de que la escena se vea negra
  * por falta de luz.
+ *
+ * El contexto WebGL puede fallar o perderse en hardware/drivers variados
+ * (laptops con GPU integrada, tablets); esta vista lo detecta y ofrece
+ * reintentar en vez de quedarse en una pantalla negra sin explicación.
  */
 export function Cube3dMonitorView({ state, players }: GameMonitorProps<unknown>) {
   const cube3d = state as Cube3dState | null;
   const containerRef = useRef<HTMLDivElement>(null);
   const refs = useRef<SceneRefs | null>(null);
   const [webglError, setWebglError] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -55,12 +61,24 @@ export function Cube3dMonitorView({ state, players }: GameMonitorProps<unknown>)
 
     let renderer: THREE.WebGLRenderer;
     try {
-      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer = new THREE.WebGLRenderer({
+        antialias: false,
+        alpha: false,
+        powerPreference: "default",
+        failIfMajorPerformanceCaveat: false,
+      });
     } catch {
       queueMicrotask(() => setWebglError(true));
       return;
     }
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     container.appendChild(renderer.domElement);
+
+    const handleContextLost = (e: Event) => {
+      e.preventDefault();
+      queueMicrotask(() => setWebglError(true));
+    };
+    renderer.domElement.addEventListener("webglcontextlost", handleContextLost);
 
     const platform = new THREE.Mesh(
       new THREE.BoxGeometry(PLATFORM_HALF * 2, 0.2, PLATFORM_HALF * 2),
@@ -106,6 +124,7 @@ export function Cube3dMonitorView({ state, players }: GameMonitorProps<unknown>)
 
     return () => {
       observer.disconnect();
+      renderer.domElement.removeEventListener("webglcontextlost", handleContextLost);
       refs.current?.cubes.forEach((mesh) => {
         mesh.geometry.dispose();
         (mesh.material as THREE.Material).dispose();
@@ -122,7 +141,7 @@ export function Cube3dMonitorView({ state, players }: GameMonitorProps<unknown>)
       container.removeChild(renderer.domElement);
       refs.current = null;
     };
-  }, []);
+  }, [attempt]);
 
   useEffect(() => {
     const current = refs.current;
@@ -150,19 +169,32 @@ export function Cube3dMonitorView({ state, players }: GameMonitorProps<unknown>)
   }
 
   return (
-    <div className="flex flex-1 flex-col gap-4 p-6">
+    <div className="flex flex-1 flex-col gap-4 p-6 lg:p-10">
       <div className="flex items-center justify-between">
-        <p className="text-lg font-semibold">Cubo de equilibrio</p>
-        <p className="text-2xl font-mono tabular-nums">{Math.ceil(cube3d.remainingMs / 1000)}s</p>
+        <p className="text-lg font-semibold lg:text-2xl">Cubo de equilibrio</p>
+        <p className="text-2xl font-mono tabular-nums lg:text-4xl">
+          {Math.ceil(cube3d.remainingMs / 1000)}s
+        </p>
       </div>
-      <div className="relative w-full flex-1" style={{ aspectRatio: "16 / 10" }}>
+      <div className="relative w-full flex-1" style={{ minHeight: 260, aspectRatio: "16 / 10" }}>
         {webglError ? (
-          <div className="absolute inset-0 flex items-center justify-center rounded-2xl bg-surface text-center px-6 text-muted">
-            Este dispositivo no soporta gráficos 3D (WebGL). Prueba con otro navegador o
-            dispositivo.
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 rounded-2xl bg-surface text-center px-6 text-muted">
+            <p>
+              No se pudo mostrar el gráfico 3D en este navegador. Puede ser un problema temporal
+              de la tarjeta gráfica.
+            </p>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setWebglError(false);
+                setAttempt((n) => n + 1);
+              }}
+            >
+              Reintentar
+            </Button>
           </div>
         ) : (
-          <div ref={containerRef} className="absolute inset-0 overflow-hidden rounded-2xl" />
+          <div key={attempt} ref={containerRef} className="absolute inset-0 overflow-hidden rounded-2xl" />
         )}
       </div>
     </div>

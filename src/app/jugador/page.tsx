@@ -148,7 +148,10 @@ export default function JugadorPage() {
   const inGame =
     selectedGame && (store.status === "PLAYING" || store.status === "PAUSED");
 
-  if (inGame && !calibrated) {
+  // Los juegos que no usan sensores (p. ej. Simón dice, que ahora es de
+  // botones) entran directo: pedir permiso de movimiento sin necesitarlo
+  // solo agrega fricción y una alerta del navegador que confunde.
+  if (inGame && !calibrated && selectedGame.requiredSensors.length > 0) {
     return (
       <SensorGate
         requireCalibration={selectedGame.needsCalibration}
@@ -166,7 +169,9 @@ export default function JugadorPage() {
             Salir
           </Button>
         </header>
-        <div className="flex-1 relative">
+        {/* flex para que la vista del juego (que usa flex-1) ocupe todo el
+            alto disponible y quede centrada, no pegada al encabezado. */}
+        <div className="relative flex flex-1 flex-col">
           <GameRuntimePlayer
             definition={selectedGame}
             myId={myId}

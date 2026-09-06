@@ -17,15 +17,17 @@ export function GameStage({
   children,
   aspectRatio = "4 / 3",
   className = "",
+  style,
 }: {
   children: ReactNode;
   aspectRatio?: string;
   className?: string;
+  style?: CSSProperties;
 }) {
   return (
     <div
       className={`relative w-full max-h-full overflow-hidden rounded-2xl bg-surface ${className}`}
-      style={{ aspectRatio }}
+      style={{ aspectRatio, ...style }}
     >
       {children}
     </div>

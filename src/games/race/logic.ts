@@ -3,11 +3,11 @@ import type { GameResult } from "@/core/types";
 
 export type RaceInput = { type: "advance" } | { type: "lane"; lane: 0 | 1 | 2 };
 
-const TRACK_LENGTH = 1000;
+const BASE_TRACK_LENGTH = 1000;
+const BASE_DURATION_MS = 60000;
 const STEP = 42;
 const HIT_COOLDOWN_MS = 700;
 const HIT_WINDOW = 16;
-const MAX_DURATION_MS = 60000;
 
 interface Obstacle {
   id: number;
@@ -34,10 +34,15 @@ export interface RaceState {
 }
 
 export function createRaceEngine(context: GameEngineContext): GameEngine<RaceInput> {
+  const maxDurationMs = context.options.roundValue * 1000 || BASE_DURATION_MS;
+  // Una ronda más larga da una pista más larga (más obstáculos y distancia),
+  // no solo más tiempo muerto después de llegar a la meta.
+  const trackLength = Math.round((BASE_TRACK_LENGTH * (maxDurationMs / BASE_DURATION_MS)) / 10) * 10;
+
   const obstacles: Obstacle[] = [];
   let cursor = 140;
   let obstacleId = 0;
-  while (cursor < TRACK_LENGTH - 60) {
+  while (cursor < trackLength - 60) {
     if (Math.random() < 0.75) {
       obstacles.push({
         id: obstacleId++,
@@ -53,7 +58,7 @@ export function createRaceEngine(context: GameEngineContext): GameEngine<RaceInp
 
   const state: RaceState = {
     phase: "racing",
-    trackLength: TRACK_LENGTH,
+    trackLength,
     elapsedMs: 0,
     obstacles: obstacles.map(({ id, lane, position }) => ({ id, lane, position })),
     players: context.players.map((p) => ({
@@ -94,7 +99,7 @@ export function createRaceEngine(context: GameEngineContext): GameEngine<RaceInp
 
       if (input.type === "advance") {
         if (player.cooldownMs > 0) return;
-        player.progress = Math.min(TRACK_LENGTH, player.progress + STEP);
+        player.progress = Math.min(trackLength, player.progress + STEP);
 
         for (const obstacle of obstacles) {
           if (obstacle.lane !== player.lane) continue;
@@ -106,7 +111,7 @@ export function createRaceEngine(context: GameEngineContext): GameEngine<RaceInp
           }
         }
 
-        if (player.progress >= TRACK_LENGTH) {
+        if (player.progress >= trackLength) {
           player.finished = true;
           player.finishOrder = finishCounter++;
         }
@@ -121,7 +126,7 @@ export function createRaceEngine(context: GameEngineContext): GameEngine<RaceInp
       for (const player of state.players) {
         if (player.cooldownMs > 0) player.cooldownMs = Math.max(0, player.cooldownMs - dtMs);
       }
-      if (state.elapsedMs >= MAX_DURATION_MS) {
+      if (state.elapsedMs >= maxDurationMs) {
         state.phase = "gameover";
       }
       emit();

@@ -26,8 +26,30 @@ export interface GameEngine<TInput = unknown> {
   cleanup: () => void;
 }
 
+/**
+ * Rango configurable por el host antes de iniciar. La mayoría de juegos usa
+ * segundos (duración de la ronda); Dardos usa "throws" (tiros por jugador) y
+ * Simón usa "lives" (errores permitidos antes de eliminar), porque ninguno
+ * de los dos tiene un reloj: son de turnos/eliminación.
+ */
+export interface DurationConfig {
+  min: number;
+  max: number;
+  default: number;
+  step: number;
+  unit: "seconds" | "throws" | "lives";
+}
+
+export interface GameLaunchOptions {
+  /** Segundos o tiros según GameDefinition.duration?.unit. */
+  roundValue: number;
+  /** Solo relevante si GameDefinition.supportsSplitScreen es true. */
+  splitScreen: boolean;
+}
+
 export interface GameEngineContext {
   players: Player[];
+  options: GameLaunchOptions;
   /** El motor debe llamar esto cada vez que su estado cambie. */
   onStateChange: (state: unknown) => void;
 }
@@ -41,6 +63,10 @@ export interface GameDefinition<TInput = unknown> {
   requiredSensors: SensorType[];
   /** Si el juego usa inclinación, conviene calibrar antes de empezar. */
   needsCalibration: boolean;
+  /** Si se define, el host puede elegir la duración de la ronda antes de iniciar. */
+  duration?: DurationConfig;
+  /** Si el juego puede jugarse en pantalla dividida (una sub-partida por jugador). */
+  supportsSplitScreen?: boolean;
   Thumbnail: ComponentType<{ className?: string }>;
   MonitorComponent: ComponentType<GameMonitorProps<unknown>>;
   PlayerComponent: ComponentType<GamePlayerProps<TInput>>;

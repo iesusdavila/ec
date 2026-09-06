@@ -12,6 +12,8 @@ export const fruitSliceDefinition: GameDefinition<Record<string, never>> = {
   maxPlayers: 3,
   requiredSensors: ["motion"],
   needsCalibration: false,
+  duration: { min: 30, max: 120, default: 45, step: 15, unit: "seconds" },
+  supportsSplitScreen: true,
   Thumbnail: FruitSliceThumbnail,
   MonitorComponent: FruitSliceMonitorView,
   PlayerComponent: FruitSlicePlayerView,

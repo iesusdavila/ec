@@ -1,7 +1,7 @@
 import type { GameEngine, GameEngineContext } from "@/games/types";
 import type { GameResult } from "@/core/types";
 
-const THROWS_PER_PLAYER = 3;
+const DEFAULT_THROWS_PER_PLAYER = 3;
 /** Pequeño temblor para que no sea perfectamente milimétrico, no reemplaza la puntería real. */
 const HAND_JITTER = 0.03;
 
@@ -18,6 +18,7 @@ export interface DartsState {
   phase: "aiming" | "gameover";
   turnOrder: string[];
   currentPlayerId: string | null;
+  throwsPerPlayer: number;
   throwsTaken: Record<string, number>;
   scores: Record<string, number>;
   aimX: number;
@@ -35,12 +36,14 @@ function pointsForDistance(distance: number): number {
 }
 
 export function createDartsEngine(context: GameEngineContext): GameEngine<DartsInput> {
+  const throwsPerPlayer = context.options.roundValue || DEFAULT_THROWS_PER_PLAYER;
   const turnOrder = context.players.map((p) => p.id);
 
   const state: DartsState = {
     phase: "aiming",
     turnOrder,
     currentPlayerId: turnOrder[0] ?? null,
+    throwsPerPlayer,
     throwsTaken: Object.fromEntries(turnOrder.map((id) => [id, 0])),
     scores: Object.fromEntries(turnOrder.map((id) => [id, 0])),
     aimX: 0,
@@ -53,7 +56,7 @@ export function createDartsEngine(context: GameEngineContext): GameEngine<DartsI
   }
 
   function advanceTurn() {
-    if (turnOrder.every((id) => state.throwsTaken[id] >= THROWS_PER_PLAYER)) {
+    if (turnOrder.every((id) => state.throwsTaken[id] >= throwsPerPlayer)) {
       state.phase = "gameover";
       state.currentPlayerId = null;
       return;
@@ -61,7 +64,7 @@ export function createDartsEngine(context: GameEngineContext): GameEngine<DartsI
     const currentIndex = turnOrder.indexOf(state.currentPlayerId ?? turnOrder[0]);
     for (let step = 1; step <= turnOrder.length; step++) {
       const candidate = turnOrder[(currentIndex + step) % turnOrder.length];
-      if (state.throwsTaken[candidate] < THROWS_PER_PLAYER) {
+      if (state.throwsTaken[candidate] < throwsPerPlayer) {
         state.currentPlayerId = candidate;
         state.aimX = 0;
         state.aimY = 0;

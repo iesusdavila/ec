@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { PresenceChannel } from "pusher-js";
-import type { GameDefinition, GameEngine } from "@/games/types";
+import type { GameDefinition, GameEngine, GameLaunchOptions } from "@/games/types";
 import type { GameResult, Player } from "@/core/types";
 import { RealtimeEvent } from "@/core/realtime/channel";
 import { sendClientEvent, useChannelEvent } from "@/core/realtime/useChannelEvent";
@@ -37,6 +37,7 @@ interface GameRuntimeHostProps {
   definition: GameDefinition;
   players: Player[];
   channel: PresenceChannel | null;
+  options: GameLaunchOptions;
   paused?: boolean;
   onFinish: (result: GameResult) => void;
 }
@@ -56,6 +57,7 @@ export function GameRuntimeHost({
   definition,
   players,
   channel,
+  options,
   paused = false,
   onFinish,
 }: GameRuntimeHostProps) {
@@ -99,6 +101,7 @@ export function GameRuntimeHost({
 
     const engine = definition.createEngine({
       players,
+      options,
       onStateChange: (next) => {
         latestSnapshot = next;
         setStateBox({ value: next });
@@ -167,7 +170,7 @@ export function GameRuntimeHost({
 
   if (waiting) {
     return (
-      <div className="flex flex-1 items-center justify-center text-lg text-muted">
+      <div className="flex flex-1 items-center justify-center text-lg text-muted lg:text-2xl">
         Esperando a los jugadores… ({readyCount}/{players.length})
       </div>
     );

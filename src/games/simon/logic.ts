@@ -1,15 +1,16 @@
 import type { GameEngine, GameEngineContext } from "@/games/types";
 import type { GameResult } from "@/core/types";
 
-export type Direction = "up" | "down" | "left" | "right";
+export type Direction = "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
 
-const DIRECTIONS: Direction[] = ["up", "down", "left", "right"];
+const DIRECTIONS: Direction[] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
 
 const SHOW_STEP_MS = 600;
 const SHOW_GAP_MS = 250;
 const INPUT_MS_PER_STEP = 1600;
 const INPUT_MS_BASE = 1100;
 const MAX_ROUND = 15;
+const DEFAULT_LIVES = 1;
 
 interface SimonPlayerState {
   id: string;
@@ -18,6 +19,7 @@ interface SimonPlayerState {
   completedRound: boolean;
   roundsSurvived: number;
   eliminatedAtRound: number | null;
+  lives: number;
 }
 
 export interface SimonState {
@@ -38,6 +40,8 @@ function inputBudget(steps: number): number {
 }
 
 export function createSimonEngine(context: GameEngineContext): GameEngine<Direction> {
+  const maxLives = context.options.roundValue || DEFAULT_LIVES;
+
   const state: SimonState = {
     phase: "showing",
     sequence: [],
@@ -51,6 +55,7 @@ export function createSimonEngine(context: GameEngineContext): GameEngine<Direct
       completedRound: false,
       roundsSurvived: 0,
       eliminatedAtRound: null,
+      lives: maxLives,
     })),
   };
 
@@ -111,6 +116,16 @@ export function createSimonEngine(context: GameEngineContext): GameEngine<Direct
     player.eliminatedAtRound = state.round;
   }
 
+  /** Al fallar: si le quedan vidas, reintenta la ronda actual; si no, queda eliminado. */
+  function loseLife(player: SimonPlayerState) {
+    player.lives -= 1;
+    if (player.lives <= 0) {
+      eliminate(player);
+    } else {
+      player.progress = 0;
+    }
+  }
+
   return {
     getState: () => state,
 
@@ -131,7 +146,7 @@ export function createSimonEngine(context: GameEngineContext): GameEngine<Direct
           player.completedRound = true;
         }
       } else {
-        eliminate(player);
+        loseLife(player);
       }
       checkRoundOutcome();
       emit();
@@ -159,7 +174,7 @@ export function createSimonEngine(context: GameEngineContext): GameEngine<Direct
         state.remainingMs -= dtMs;
         if (state.remainingMs <= 0) {
           for (const p of state.players) {
-            if (p.alive && !p.completedRound) eliminate(p);
+            if (p.alive && !p.completedRound) loseLife(p);
           }
           checkRoundOutcome();
         }

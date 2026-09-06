@@ -15,7 +15,7 @@ export function RaceMonitorView({ state, players }: GameMonitorProps<unknown>) {
   const laneCount = 3;
 
   return (
-    <div className="flex flex-1 flex-col gap-4 p-6">
+    <div className="flex flex-1 flex-col gap-4 p-6 lg:p-10">
       <GameStage aspectRatio="16 / 7" className="flex-1">
         {/* Carriles de fondo */}
         <div className="absolute inset-0 flex flex-col">
@@ -63,7 +63,10 @@ export function RaceMonitorView({ state, players }: GameMonitorProps<unknown>) {
 
       <div className="flex flex-wrap justify-center gap-3">
         {ranked.map((p) => (
-          <div key={p.id} className="rounded-full bg-surface border border-border px-4 py-2">
+          <div
+            key={p.id}
+            className="rounded-full bg-surface border border-border px-4 py-2 lg:px-6 lg:py-3 lg:text-lg"
+          >
             {nameFor(p.id)}: {Math.round((p.progress / race.trackLength) * 100)}%
             {p.finished ? " · meta" : ""}
           </div>

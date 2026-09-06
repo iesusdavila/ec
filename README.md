@@ -108,16 +108,29 @@ renderizado local del monitor no está limitado, así que el juego se ve fluido
 en la pantalla principal incluso si los teléfonos reciben menos actualizaciones
 por segundo.
 
+Antes de iniciar, el host puede ajustar la partida: cada juego declara en su
+`GameDefinition` un `duration` (con unidad `seconds`, `throws` o `lives`) y,
+opcionalmente, `supportsSplitScreen`. Esas opciones llegan al motor en
+`context.options`, así que agregar un ajuste nuevo a un juego no toca el
+código de los demás.
+
 ## Juegos incluidos
 
-| Juego | Jugadores | Sensores | Resumen |
+| Juego | Jugadores | Control | Configurable antes de iniciar |
 |---|---|---|---|
-| Simón dice | 1–5 | Orientación | Repite una secuencia de inclinaciones que crece cada ronda |
-| Corta frutas | 1–3 | Movimiento | Agita el teléfono para cortar frutas y evitar bombas |
-| Dardos | 1–5 | Orientación + movimiento | Apunta inclinando, lanza con un gesto, por turnos |
-| Carrera | 2–5 | Movimiento + orientación | Agita para avanzar, inclina para cambiar de carril y esquivar |
-| Laberinto de equilibrio | 1–4 | Orientación + giroscopio | Inclina el teléfono para llevar una bola hasta la meta, con niveles rotativos |
-| Cubo 3D (experimental) | 1–2 | Orientación | Prueba de integración de Three.js: inclina para mover un cubo hasta la meta |
+| Simón dice | 1–5 | 8 botones en pantalla (N, NE, E, SE, S, SO, O, NO) | Vidas por jugador (1–5) |
+| Corta frutas | 1–3 | Agitar el teléfono (acelerómetro) | Duración (30–120s) y modo compartido / pantalla dividida |
+| Dardos | 1–5 | Mantener presionado + inclinar para apuntar, soltar para lanzar | Tiros por jugador (3–9) |
+| Carrera | 2–5 | Agitar para avanzar, inclinar para cambiar de carril | Duración (30–120s; la pista crece con el tiempo elegido) |
+| Laberinto de equilibrio | 1–4 | Inclinación (orientación / giroscopio) | Duración (30–180s; encadena niveles mientras quede tiempo) |
+| Cubo 3D (experimental) | 1–2 | Inclinación (orientación) | Duración (20–90s) |
+
+Simón dice usa botones en vez de sensores a propósito: detectar 8 direcciones
+por inclinación resultaba impreciso y frustrante, y al no necesitar sensores
+tampoco pide permisos al navegador.
+
+Al terminar una partida, el monitor ofrece **Jugar de nuevo** (misma
+configuración, sin volver al menú) o **Elegir otro juego**.
 
 ## Desarrollo local
 

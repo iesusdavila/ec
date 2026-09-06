@@ -5,10 +5,12 @@ export function ResultScreen({
   result,
   players,
   onContinue,
+  onPlayAgain,
 }: {
   result: GameResult;
   players: Player[];
   onContinue: () => void;
+  onPlayAgain: () => void;
 }) {
   const nameFor = (id: string) => players.find((p) => p.id === id)?.name ?? id;
   const winner = result.winnerId ? nameFor(result.winnerId) : null;
@@ -17,7 +19,7 @@ export function ResultScreen({
     <div className="flex flex-col items-center gap-8">
       <div>
         <p className="text-sm uppercase tracking-[0.3em] text-muted">Resultado</p>
-        <h1 className="text-4xl font-bold mt-2">
+        <h1 className="text-4xl font-bold mt-2 lg:text-5xl">
           {winner ? `${winner} gana` : "Partida terminada"}
         </h1>
       </div>
@@ -36,9 +38,14 @@ export function ResultScreen({
         ))}
       </ol>
 
-      <Button size="lg" onClick={onContinue}>
-        Volver a selección de juego
-      </Button>
+      <div className="flex gap-3">
+        <Button size="xl" onClick={onPlayAgain}>
+          Jugar de nuevo
+        </Button>
+        <Button size="xl" variant="secondary" onClick={onContinue}>
+          Elegir otro juego
+        </Button>
+      </div>
     </div>
   );
 }

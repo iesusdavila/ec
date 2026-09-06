@@ -12,6 +12,7 @@ export const raceDefinition: GameDefinition<RaceInput> = {
   maxPlayers: 5,
   requiredSensors: ["motion", "orientation"],
   needsCalibration: true,
+  duration: { min: 30, max: 120, default: 60, step: 30, unit: "seconds" },
   Thumbnail: RaceThumbnail,
   MonitorComponent: RaceMonitorView,
   PlayerComponent: RacePlayerView,

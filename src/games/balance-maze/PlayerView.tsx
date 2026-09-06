@@ -23,11 +23,13 @@ export function BalanceMazePlayerView({ myId, gameState, sendInput }: GamePlayer
     return () => clearInterval(interval);
   }, [sendInput]);
 
-  if (me?.finished) {
+  if (me?.reachedGoal) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
         <p className="text-xl font-semibold">¡Llegaste a la meta!</p>
-        <p className="text-muted">Espera a que termine la ronda.</p>
+        <p className="text-muted">
+          Niveles completados: {me.levelsCompleted}. Espera a que los demás lleguen…
+        </p>
       </div>
     );
   }

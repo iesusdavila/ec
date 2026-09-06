@@ -26,20 +26,20 @@ export function DartsMonitorView({ state, players }: GameMonitorProps<unknown>) 
   }
 
   return (
-    <div className="flex flex-1 flex-col gap-4 p-6">
+    <div className="flex flex-1 flex-col gap-4 p-6 lg:p-10">
       <div className="flex items-center justify-between">
-        <p className="text-lg font-semibold">
+        <p className="text-lg font-semibold lg:text-2xl">
           Turno de {darts.currentPlayerId ? nameFor(darts.currentPlayerId) : "—"}
         </p>
         {darts.lastThrow ? (
-          <p className="text-muted">
+          <p className="text-muted lg:text-lg">
             {nameFor(darts.lastThrow.playerId)} anotó {darts.lastThrow.points}
           </p>
         ) : null}
       </div>
 
       <div className="flex flex-1 items-center justify-center">
-        <GameStage aspectRatio="1 / 1" className="max-w-[min(70vh,100%)]">
+        <GameStage aspectRatio="1 / 1" className="max-w-[min(80vh,100%)]">
           {RINGS.map((ring) => (
             <div
               key={ring.diameter}
@@ -57,20 +57,20 @@ export function DartsMonitorView({ state, players }: GameMonitorProps<unknown>) 
 
           {darts.phase === "aiming" && (
             <div
-              className="absolute h-6 w-6 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white/80"
+              className="absolute h-8 w-8 -translate-x-1/2 -translate-y-1/2 rounded-full border-[3px] border-white shadow-lg"
               style={{ left: `${toPct(darts.aimX)}%`, top: `${toPct(darts.aimY)}%` }}
             />
           )}
 
           {darts.lastThrow && (
             <div
-              className="absolute h-10 w-10 -translate-x-1/2 -translate-y-full"
+              className="absolute h-24 w-24 -translate-x-1/2 -translate-y-full lg:h-32 lg:w-32"
               style={{
                 left: `${toPct(darts.lastThrow.x)}%`,
                 top: `${toPct(darts.lastThrow.y)}%`,
               }}
             >
-              <DartIcon className="h-full w-full drop-shadow" />
+              <DartIcon className="h-full w-full drop-shadow-lg" />
             </div>
           )}
         </GameStage>
@@ -80,11 +80,12 @@ export function DartsMonitorView({ state, players }: GameMonitorProps<unknown>) 
         {darts.turnOrder.map((id) => (
           <div
             key={id}
-            className={`rounded-full border px-4 py-2 ${
+            className={`rounded-full border px-4 py-2 lg:px-6 lg:py-3 lg:text-lg ${
               id === darts.currentPlayerId ? "border-accent" : "border-border"
             }`}
           >
             {nameFor(id)}: <span className="font-semibold">{darts.scores[id]}</span>
+            <span className="text-muted"> · {darts.throwsTaken[id]}/{darts.throwsPerPlayer}</span>
           </div>
         ))}
       </div>

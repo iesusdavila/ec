@@ -12,7 +12,7 @@ export const OBSTACLE = { x: 0, z: 0, halfW: 1, halfD: 1 };
 export const GOAL = { x: 3.6, z: 0, r: 0.7 };
 export const START = { x: -3.6, z: 0 };
 
-const MATCH_DURATION_MS = 30000;
+const BASE_DURATION_MS = 30000;
 const MAX_ACCEL = 14;
 const MAX_TILT_DEG = 30;
 const DAMPING_PER_S = 0.55;
@@ -56,10 +56,11 @@ function collideObstacle(x: number, z: number, vx: number, vz: number) {
 }
 
 export function createCube3dEngine(context: GameEngineContext): GameEngine<Cube3dInput> {
+  const durationMs = context.options.roundValue * 1000 || BASE_DURATION_MS;
   const state: Cube3dState = {
     phase: "playing",
     elapsedMs: 0,
-    remainingMs: MATCH_DURATION_MS,
+    remainingMs: durationMs,
     players: context.players.map((p) => ({
       id: p.id,
       x: START.x,
@@ -93,7 +94,7 @@ export function createCube3dEngine(context: GameEngineContext): GameEngine<Cube3
       if (state.phase !== "playing") return;
       const dt = dtMs / 1000;
       state.elapsedMs += dtMs;
-      state.remainingMs = Math.max(0, MATCH_DURATION_MS - state.elapsedMs);
+      state.remainingMs = Math.max(0, durationMs - state.elapsedMs);
 
       for (const player of state.players) {
         if (player.finished) continue;

@@ -9,6 +9,7 @@ import { Button } from "@/components/Button";
 import { FullscreenMessage } from "@/components/FullscreenMessage";
 import { ConnectionBanner } from "@/components/ConnectionBanner";
 import { GameGrid } from "@/app/monitor/GameGrid";
+import { GameOptionsPanel } from "@/app/monitor/GameOptionsPanel";
 import { ResultScreen } from "@/app/monitor/ResultScreen";
 import { useSessionStore } from "@/core/session/useSessionStore";
 import { usePresenceChannel } from "@/core/realtime/usePresenceChannel";
@@ -20,13 +21,17 @@ import { generateId } from "@/core/utils/id";
 import { getGame, listGames } from "@/games";
 import { GameRuntimeHost } from "@/games/runtime/GameRuntimeHost";
 import type { GameResult } from "@/core/types";
+import type { GameLaunchOptions } from "@/games/types";
 
 const HOST_COLOR = "#111113";
+const DEFAULT_OPTIONS: GameLaunchOptions = { roundValue: 0, splitScreen: false };
 
 export default function MonitorPage() {
   const [pin, setPin] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [myId] = useState(() => generateId("host"));
+  const [gameOptions, setGameOptions] = useState<GameLaunchOptions>(DEFAULT_OPTIONS);
+  const [launchToken, setLaunchToken] = useState(0);
 
   const store = useSessionStore();
   const { channel, players, connectionState } = usePresenceChannel(
@@ -112,6 +117,7 @@ export default function MonitorPage() {
       return;
     }
     store.setSelectedGameId(id);
+    setGameOptions({ roundValue: getGame(id)?.duration?.default ?? 0, splitScreen: false });
     if (store.status === "WAITING_FOR_PLAYERS" || store.status === "READY") {
       store.requestStatus("SELECTING_GAME");
     }
@@ -119,6 +125,7 @@ export default function MonitorPage() {
 
   function handleStart() {
     if (store.requestStatus("STARTING")) {
+      setLaunchToken((n) => n + 1);
       store.requestStatus("PLAYING");
     }
   }
@@ -140,6 +147,14 @@ export default function MonitorPage() {
   function handleContinue() {
     store.setLastResult(null);
     store.requestStatus("SELECTING_GAME");
+  }
+
+  function handlePlayAgain() {
+    store.setLastResult(null);
+    if (store.requestStatus("SELECTING_GAME") && store.requestStatus("READY") && store.requestStatus("STARTING")) {
+      setLaunchToken((n) => n + 1);
+      store.requestStatus("PLAYING");
+    }
   }
 
   return (
@@ -174,9 +189,9 @@ export default function MonitorPage() {
     }
     return (
       <main className="min-h-dvh w-full flex flex-col">
-        <header className="flex items-center justify-between px-6 py-4 border-b border-border">
-          <span className="font-semibold">{selectedGame.name}</span>
-          <div className="flex gap-2">
+        <header className="flex items-center justify-between px-6 py-4 border-b border-border lg:px-10 lg:py-6">
+          <span className="font-semibold lg:text-2xl">{selectedGame.name}</span>
+          <div className="flex gap-2 lg:gap-3">
             <Button variant="secondary" onClick={handleTogglePause}>
               {store.status === "PAUSED" ? "Reanudar" : "Pausar"}
             </Button>
@@ -185,11 +200,15 @@ export default function MonitorPage() {
             </Button>
           </div>
         </header>
-        <div className="flex-1 relative">
+        {/* flex para que la vista del juego ocupe todo el alto disponible:
+            los juegos usan flex-1 y sin esto colapsan a su alto de contenido. */}
+        <div className="relative flex flex-1 flex-col">
           <GameRuntimeHost
+            key={`${selectedGame.id}-${launchToken}`}
             definition={selectedGame}
             players={players}
             channel={channel}
+            options={gameOptions}
             paused={store.status === "PAUSED"}
             onFinish={handleFinish}
           />
@@ -206,7 +225,12 @@ export default function MonitorPage() {
   if (store.status === "FINISHED" && store.lastResult) {
     return (
       <Screen>
-        <ResultScreen result={store.lastResult} players={players} onContinue={handleContinue} />
+        <ResultScreen
+          result={store.lastResult}
+          players={players}
+          onContinue={handleContinue}
+          onPlayAgain={handlePlayAgain}
+        />
       </Screen>
     );
   }
@@ -218,8 +242,8 @@ export default function MonitorPage() {
       <PinDisplay pin={pin} />
       <PlayerList players={players} maxPlayers={selectedGame?.maxPlayers} />
 
-      <div className="flex flex-col items-center gap-4 w-full">
-        <p className="text-muted">Elige un juego</p>
+      <div className="flex flex-col items-center gap-4 w-full lg:gap-6">
+        <p className="text-muted lg:text-xl">Elige un juego</p>
         <GameGrid
           games={games}
           selectedId={store.selectedGameId}
@@ -228,8 +252,12 @@ export default function MonitorPage() {
         />
       </div>
 
+      {selectedGame && (selectedGame.duration || selectedGame.supportsSplitScreen) ? (
+        <GameOptionsPanel game={selectedGame} options={gameOptions} onChange={setGameOptions} />
+      ) : null}
+
       <div className="flex flex-col items-center gap-2">
-        <Button size="lg" disabled={!canStart} onClick={handleStart}>
+        <Button size="xl" disabled={!canStart} onClick={handleStart}>
           Iniciar partida
         </Button>
         {selectedGame && !canStart ? (

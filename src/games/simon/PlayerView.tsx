@@ -1,91 +1,43 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import type { GamePlayerProps } from "@/games/types";
-import { sensorService } from "@/core/sensors/SensorService";
-import { useSensorLifecycle } from "@/core/sensors/useSensors";
 import type { SimonState, Direction } from "@/games/simon/logic";
 
-// Umbral deliberadamente alto: debe sentirse como "inclinar con intención",
-// no reaccionar a cualquier temblor de la mano. Ver README sección 6:
-// "la detección debe ser tolerante, no exigir movimientos extremadamente
-// precisos" — pero eso significa exigir un gesto claro, no uno ambiguo.
-const ARM_THRESHOLD = 34;
-const RELEASE_THRESHOLD = 16;
-/** El eje ganador debe superar claramente al otro para evitar diagonales ambiguas. */
-const DOMINANCE_RATIO = 1.3;
-/** Muestras seguidas con la misma dirección antes de aceptarla (filtra ruido). */
-const CONFIRM_SAMPLES = 3;
-const SAMPLE_MS = 30;
-/** Suavizado exponencial de la lectura cruda del sensor. */
-const SMOOTHING = 0.35;
+/** Evita que un doble toque accidental envíe la misma dirección dos veces. */
+const PRESS_COOLDOWN_MS = 180;
 
-function directionFromTilt(beta: number, gamma: number): Direction | null {
-  const absB = Math.abs(beta);
-  const absG = Math.abs(gamma);
-  if (absB < ARM_THRESHOLD && absG < ARM_THRESHOLD) return null;
+const PAD_LAYOUT: (Direction | null)[] = ["NW", "N", "NE", "W", null, "E", "SW", "S", "SE"];
 
-  if (absB >= absG) {
-    if (absG > 0 && absB < absG * DOMINANCE_RATIO) return null;
-    return beta > 0 ? "down" : "up";
-  }
-  if (absB > 0 && absG < absB * DOMINANCE_RATIO) return null;
-  return gamma > 0 ? "right" : "left";
-}
+const ARROWS: Record<Direction, string> = {
+  N: "↑",
+  NE: "↗",
+  E: "→",
+  SE: "↘",
+  S: "↓",
+  SW: "↙",
+  W: "←",
+  NW: "↖",
+};
 
 export function SimonPlayerView({ myId, gameState, sendInput }: GamePlayerProps<Direction>) {
   const simon = gameState as SimonState | null;
-  const [live, setLive] = useState<Direction | null>(null);
-  const armedRef = useRef(false);
-  const smoothedRef = useRef({ beta: 0, gamma: 0 });
-  const pendingRef = useRef<{ direction: Direction; count: number } | null>(null);
-
-  useSensorLifecycle(true);
+  const [pressed, setPressed] = useState<Direction | null>(null);
+  const cooldownRef = useRef(false);
 
   const me = simon?.players.find((p) => p.id === myId);
-  const canPlay = simon?.phase === "input" && me?.alive && !me.completedRound;
+  const canPlay = Boolean(simon?.phase === "input" && me?.alive && !me.completedRound);
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const raw = sensorService.getTilt();
-      const smoothed = smoothedRef.current;
-      smoothed.beta += (raw.beta - smoothed.beta) * SMOOTHING;
-      smoothed.gamma += (raw.gamma - smoothed.gamma) * SMOOTHING;
-
-      const direction = directionFromTilt(smoothed.beta, smoothed.gamma);
-      setLive(direction);
-
-      if (!canPlay) {
-        pendingRef.current = null;
-        return;
-      }
-
-      if (armedRef.current) {
-        if (Math.abs(smoothed.beta) < RELEASE_THRESHOLD && Math.abs(smoothed.gamma) < RELEASE_THRESHOLD) {
-          armedRef.current = false;
-        }
-        return;
-      }
-
-      if (!direction) {
-        pendingRef.current = null;
-        return;
-      }
-
-      if (pendingRef.current?.direction === direction) {
-        pendingRef.current.count += 1;
-      } else {
-        pendingRef.current = { direction, count: 1 };
-      }
-
-      if (pendingRef.current.count >= CONFIRM_SAMPLES) {
-        armedRef.current = true;
-        pendingRef.current = null;
-        sendInput(direction);
-      }
-    }, SAMPLE_MS);
-    return () => clearInterval(interval);
-  }, [canPlay, sendInput]);
+  function handlePress(direction: Direction) {
+    if (!canPlay || cooldownRef.current) return;
+    cooldownRef.current = true;
+    setPressed(direction);
+    sendInput(direction);
+    setTimeout(() => {
+      cooldownRef.current = false;
+    }, PRESS_COOLDOWN_MS);
+    setTimeout(() => setPressed(null), 150);
+  }
 
   if (!simon) {
     return <div className="flex flex-1 items-center justify-center">Cargando…</div>;
@@ -103,34 +55,34 @@ export function SimonPlayerView({ myId, gameState, sendInput }: GamePlayerProps<
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-6 px-6 text-center">
       <p className="text-lg font-medium">
-        {simon.phase === "showing" ? "Memoriza…" : "¡Inclina el teléfono con firmeza!"}
+        {simon.phase === "showing" ? "Memoriza…" : "¡Toca la secuencia!"}
       </p>
-      {me?.completedRound && (
-        <p className="text-muted">Listo, esperando a los demás…</p>
+      {me && (
+        <p className="text-sm text-muted" aria-label={`${me.lives} vidas restantes`}>
+          {"♥".repeat(me.lives)}
+        </p>
       )}
-      <div className="grid grid-cols-3 grid-rows-3 gap-2 w-48 h-48">
-        <div />
-        <Pad active={live === "up"}>↑</Pad>
-        <div />
-        <Pad active={live === "left"}>←</Pad>
-        <div className="rounded-xl bg-surface" />
-        <Pad active={live === "right"}>→</Pad>
-        <div />
-        <Pad active={live === "down"}>↓</Pad>
-        <div />
-      </div>
-    </div>
-  );
-}
+      {me?.completedRound && <p className="text-muted">Listo, esperando a los demás…</p>}
 
-function Pad({ active, children }: { active: boolean; children: string }) {
-  return (
-    <div
-      className={`flex items-center justify-center rounded-xl text-2xl font-semibold transition-colors ${
-        active ? "bg-accent text-accent-foreground" : "bg-surface"
-      }`}
-    >
-      {children}
+      <div className="grid grid-cols-3 grid-rows-3 gap-2 w-64 h-64">
+        {PAD_LAYOUT.map((direction, i) =>
+          direction ? (
+            <button
+              key={direction}
+              disabled={!canPlay}
+              onClick={() => handlePress(direction)}
+              style={{ touchAction: "manipulation" }}
+              className={`flex items-center justify-center rounded-xl text-3xl font-semibold transition-colors disabled:opacity-40 ${
+                pressed === direction ? "bg-accent text-accent-foreground" : "bg-surface"
+              }`}
+            >
+              {ARROWS[direction]}
+            </button>
+          ) : (
+            <div key={`center-${i}`} className="rounded-xl bg-surface/40" />
+          )
+        )}
+      </div>
     </div>
   );
 }

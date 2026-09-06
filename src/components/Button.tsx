@@ -3,7 +3,7 @@
 import type { ButtonHTMLAttributes } from "react";
 
 type Variant = "primary" | "secondary" | "ghost" | "danger";
-type Size = "md" | "lg";
+type Size = "md" | "lg" | "xl";
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Variant;
@@ -20,6 +20,8 @@ const VARIANT_CLASSES: Record<Variant, string> = {
 const SIZE_CLASSES: Record<Size, string> = {
   md: "px-5 py-3 text-base rounded-xl",
   lg: "px-8 py-5 text-xl rounded-2xl",
+  /** Reservado para el Monitor en pantallas grandes; los jugadores usan "lg". */
+  xl: "px-8 py-5 text-xl rounded-2xl lg:px-12 lg:py-7 lg:text-3xl lg:rounded-3xl",
 };
 
 export function Button({
