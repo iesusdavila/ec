@@ -1,7 +1,15 @@
 import type { ReactElement } from "react";
 import type { GameMonitorProps } from "@/games/types";
-import type { FruitLane, FruitSliceState, ObjectKind } from "@/games/fruit-slice/logic";
+import type { Player } from "@/core/types";
+import type {
+  FruitLane,
+  FruitSliceState,
+  ObjectKind,
+  PlayerCursor,
+} from "@/games/fruit-slice/logic";
+import { CURSOR_FX_MS } from "@/games/fruit-slice/logic";
 import { GameStage } from "@/components/GameStage";
+import { FruitBackdrop, FRUIT_SLICE_CSS } from "@/games/fruit-slice/FruitBackdrop";
 import {
   AppleIcon,
   BananaIcon,
@@ -46,11 +54,20 @@ export function FruitSliceMonitorView({ state, players }: GameMonitorProps<unkno
   const nameFor = (id: string) => players.find((p) => p.id === id)?.name ?? "?";
   const colorFor = (id: string) => players.find((p) => p.id === id)?.color ?? "#5B8CFF";
   const ranked = Object.entries(fruit.scores).sort((a, b) => b[1] - a[1]);
+  const cursorList = Object.values(fruit.cursors);
+  // En modo compartido varios cursores conviven en el mismo carril: ahí sí hace
+  // falta distinguirlos con un aro del color del jugador y su nombre.
+  const sharedMode = !fruit.splitScreen && fruit.lanes.some((l) => l.playerIds.length > 1);
 
   return (
     <div className="flex flex-1 flex-col gap-4 p-6 lg:p-10">
+      {/* Keyframes del fondo y del halo del cursor: se inyectan una sola vez. */}
+      <style>{FRUIT_SLICE_CSS}</style>
+
       <div className="flex items-center justify-between">
-        <p className="text-lg font-semibold lg:text-2xl">Corta las frutas, evita las bombas</p>
+        <p className="text-lg font-semibold lg:text-2xl">
+          Apunta con el teléfono y corta · evita las bombas
+        </p>
         <p className="text-2xl font-mono tabular-nums lg:text-4xl">
           {Math.ceil(fruit.remainingMs / 1000)}s
         </p>
@@ -77,6 +94,9 @@ export function FruitSliceMonitorView({ state, players }: GameMonitorProps<unkno
               laneIndex={laneIndex}
               now={fruit.now}
               popups={fruit.popups}
+              cursors={cursorList.filter((c) => c.laneIndex === laneIndex)}
+              players={players}
+              sharedMode={sharedMode}
             />
           </div>
         ))}
@@ -108,17 +128,25 @@ function FruitLaneStage({
   laneIndex,
   now,
   popups,
+  cursors,
+  players,
+  sharedMode,
 }: {
   lane: FruitLane;
   laneIndex: number;
   now: number;
   popups: FruitSliceState["popups"];
+  cursors: PlayerCursor[];
+  players: Player[];
+  sharedMode: boolean;
 }) {
   const offset = shakeOffset(now, lane.lastBombAt);
   const exploding = lane.lastBombAt !== null && now - lane.lastBombAt < SHAKE_MS;
 
   return (
     <GameStage aspectRatio="4 / 3" className="flex-1" style={{ transform: `translateX(${offset}px)` }}>
+      <FruitBackdrop />
+
       {exploding && lane.lastBombAt !== null && (
         <div
           className="absolute inset-0 pointer-events-none"
@@ -143,6 +171,8 @@ function FruitLaneStage({
             <div
               key={obj.id}
               className="absolute"
+              data-obj-kind={obj.kind}
+              data-obj-sliced="true"
               style={{
                 left: `${obj.x * 100}%`,
                 top: `${y * 100}%`,
@@ -177,10 +207,13 @@ function FruitLaneStage({
           );
         }
 
+        const isBomb = obj.kind === "bomb";
         return (
           <div
             key={obj.id}
             className="absolute"
+            data-obj-kind={obj.kind}
+            data-obj-sliced="false"
             style={{
               left: `${obj.x * 100}%`,
               top: `${y * 100}%`,
@@ -189,7 +222,26 @@ function FruitLaneStage({
               transform: "translate(-50%, -50%)",
             }}
           >
-            <Icon className="h-full w-full drop-shadow" />
+            {/* Plato tenue: asienta el objeto sobre el fondo oscuro sin teñirlo. */}
+            <div
+              className="absolute rounded-full"
+              style={{
+                inset: "-16%",
+                background: isBomb
+                  ? "radial-gradient(circle, rgba(255,80,80,0.22) 0%, rgba(255,80,80,0) 68%)"
+                  : "radial-gradient(circle, rgba(255,255,255,0.12) 0%, rgba(255,255,255,0) 70%)",
+              }}
+            />
+            <div
+              className="absolute inset-0"
+              style={{
+                filter: isBomb
+                  ? "drop-shadow(0 3px 7px rgba(0,0,0,0.65)) drop-shadow(0 0 6px rgba(255,90,90,0.55))"
+                  : "drop-shadow(0 3px 7px rgba(0,0,0,0.6)) drop-shadow(0 0 2px rgba(255,255,255,0.55))",
+              }}
+            >
+              <Icon className="h-full w-full" />
+            </div>
           </div>
         );
       })}
@@ -208,13 +260,134 @@ function FruitLaneStage({
                 transform: "translate(-50%, -50%)",
                 opacity: 1 - progress,
                 color: popup.amount > 0 ? "#3ECF8E" : "#FF6B5B",
-                textShadow: "0 2px 6px rgba(0,0,0,0.25)",
+                textShadow: "0 2px 8px rgba(0,0,0,0.6)",
               }}
             >
               {popup.amount > 0 ? `+${popup.amount}` : popup.amount}
             </div>
           );
         })}
+
+      {cursors.map((cursor) => (
+        <FruitCursor
+          key={cursor.playerId}
+          cursor={cursor}
+          now={now}
+          color={players.find((p) => p.id === cursor.playerId)?.color ?? "#FF2E2E"}
+          name={players.find((p) => p.id === cursor.playerId)?.name ?? ""}
+          showLabel={sharedMode}
+        />
+      ))}
     </GameStage>
+  );
+}
+
+/**
+ * El puntero del jugador: un punto rojo grande con un halo de luz alrededor,
+ * para que en todo momento se vea a dónde está apuntando su teléfono. Al
+ * acertar un corte late un anillo verde; al cortar al aire, uno gris tenue.
+ */
+function FruitCursor({
+  cursor,
+  now,
+  color,
+  name,
+  showLabel,
+}: {
+  cursor: PlayerCursor;
+  now: number;
+  color: string;
+  name: string;
+  showLabel: boolean;
+}) {
+  const hitT =
+    cursor.lastHitAt !== null && now - cursor.lastHitAt < CURSOR_FX_MS
+      ? (now - cursor.lastHitAt) / CURSOR_FX_MS
+      : null;
+  const missT =
+    cursor.lastMissAt !== null && now - cursor.lastMissAt < CURSOR_FX_MS
+      ? (now - cursor.lastMissAt) / CURSOR_FX_MS
+      : null;
+  const ringT = hitT ?? missT;
+
+  return (
+    <div
+      className="absolute"
+      style={{
+        left: `${cursor.x * 100}%`,
+        top: `${cursor.y * 100}%`,
+        transform: "translate(-50%, -50%)",
+        zIndex: 6,
+      }}
+    >
+      {/* Halo de iluminación (late suavemente). */}
+      <div
+        className="fruitcursor-halo absolute left-1/2 top-1/2 rounded-full"
+        style={{
+          width: 150,
+          height: 150,
+          transform: "translate(-50%, -50%)",
+          background:
+            "radial-gradient(circle, rgba(255,45,45,0.5) 0%, rgba(255,45,45,0.16) 42%, rgba(255,45,45,0) 72%)",
+          animation: "fruitcursor-pulse 1.6s ease-in-out infinite",
+        }}
+      />
+
+      {/* Anillo de acierto (verde) / fallo (gris). */}
+      {ringT !== null && (
+        <div
+          className="absolute left-1/2 top-1/2 rounded-full"
+          style={{
+            width: 34 + ringT * 66,
+            height: 34 + ringT * 66,
+            transform: "translate(-50%, -50%)",
+            border: `3px solid ${hitT !== null ? "#3ECF8E" : "rgba(255,255,255,0.55)"}`,
+            opacity: 1 - ringT,
+          }}
+        />
+      )}
+
+      {/* Aro con el color del jugador (solo en modo compartido). */}
+      {showLabel && (
+        <div
+          className="absolute left-1/2 top-1/2 rounded-full"
+          style={{
+            width: 44,
+            height: 44,
+            transform: "translate(-50%, -50%)",
+            border: `2px solid ${color}`,
+            opacity: 0.9,
+          }}
+        />
+      )}
+
+      {/* Núcleo rojo. */}
+      <div
+        className="absolute left-1/2 top-1/2 rounded-full"
+        style={{
+          width: 28,
+          height: 28,
+          transform: "translate(-50%, -50%)",
+          backgroundColor: "#FF2E2E",
+          border: "3px solid rgba(255,255,255,0.92)",
+          boxShadow:
+            "0 0 14px 5px rgba(255,45,45,0.85), 0 0 36px 14px rgba(255,45,45,0.45)",
+        }}
+      />
+
+      {showLabel && name && (
+        <div
+          className="absolute left-1/2 whitespace-nowrap text-xs font-semibold lg:text-sm"
+          style={{
+            top: 30,
+            transform: "translateX(-50%)",
+            color,
+            textShadow: "0 1px 4px rgba(0,0,0,0.85)",
+          }}
+        >
+          {name}
+        </div>
+      )}
+    </div>
   );
 }
