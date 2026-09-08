@@ -3,6 +3,7 @@ import type {
   MotionGesture,
   PermissionState,
   TiltData,
+  TiltSample,
 } from "@/core/sensors/types";
 
 type Unsubscribe = () => void;
@@ -30,6 +31,8 @@ const GESTURE_COOLDOWN_MS = 350;
  */
 export class SensorService {
   private tilt: TiltData = { beta: 0, gamma: 0, alpha: 0 };
+  /** `performance.now()` del último evento de orientación recibido. */
+  private tiltAt = 0;
   private calibrationOffset: { beta: number; gamma: number } = { beta: 0, gamma: 0 };
   private acceleration: AccelerationVector = { x: 0, y: 0, z: 0 };
   private lastGestureAt = 0;
@@ -114,6 +117,20 @@ export class SensorService {
     };
   }
 
+  /**
+   * Igual que `getTilt()` pero indicando CUÁNDO se midió.
+   *
+   * Un bucle de juego a 60 fps y un sensor a ~60 Hz no van sincronizados: a
+   * veces un frame lee un dato que ya leyó el anterior. Sin este dato, un
+   * filtro no puede distinguir "la mano no se movió" de "todavía no ha llegado
+   * la siguiente medición", y frena el puntero sin motivo. Con `at` puede
+   * limitarse a predecir hasta que llegue una lectura de verdad.
+   */
+  getTiltSample(): TiltSample {
+    const tilt = this.getTilt();
+    return { ...tilt, at: this.tiltAt };
+  }
+
   getAcceleration(): AccelerationVector {
     return this.acceleration;
   }
@@ -129,6 +146,7 @@ export class SensorService {
       gamma: event.gamma ?? 0,
       alpha: event.alpha ?? 0,
     };
+    this.tiltAt = performance.now();
   };
 
   private handleMotion = (event: DeviceMotionEvent) => {

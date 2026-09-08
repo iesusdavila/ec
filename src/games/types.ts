@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
 import type { GameResult, Player, SensorType } from "@/core/types";
+import type { ClockEcho } from "@/core/realtime/clockSync";
 
 export interface GameMonitorProps<TState> {
   state: TState | null;
@@ -11,13 +12,34 @@ export interface GamePlayerProps<TInput> {
   players: Player[];
   /** Estado público del juego, recibido en tiempo real desde el host. */
   gameState: unknown;
+  /**
+   * Identidad estable durante toda la partida: se puede guardar en un ref y
+   * llamarla desde un bucle sin volver a crearlo en cada render.
+   */
   sendInput: (input: TInput) => void;
+  /**
+   * Dato para que el host mida la latencia real de este teléfono. Los juegos
+   * con puntería deben adjuntarlo a sus entradas continuas; el resto puede
+   * ignorarlo. Ver `core/realtime/clockSync.ts`.
+   */
+  getClockEcho: () => ClockEcho | null;
+}
+
+/** Contexto de red de una entrada, medido por el host. */
+export interface InputMeta {
+  /**
+   * Latencia estimada de un sentido (teléfono → monitor) en ms para ESTE
+   * jugador, medida sobre mensajes reales. Los juegos con puntería la usan
+   * para evaluar el gesto contra lo que el jugador veía cuando lo hizo, no
+   * contra lo que hay en pantalla ahora. Ver `core/realtime/clockSync.ts`.
+   */
+  latencyMs: number;
 }
 
 export interface GameEngine<TInput = unknown> {
   getState: () => unknown;
   start: () => void;
-  handleInput: (playerId: string, input: TInput) => void;
+  handleInput: (playerId: string, input: TInput, meta: InputMeta) => void;
   /** Paso de simulación; los juegos por turnos pueden dejarlo vacío. */
   tick: (dtMs: number) => void;
   isFinished: () => boolean;
@@ -67,6 +89,19 @@ export interface GameDefinition<TInput = unknown> {
   duration?: DurationConfig;
   /** Si el juego puede jugarse en pantalla dividida (una sub-partida por jugador). */
   supportsSplitScreen?: boolean;
+  /**
+   * Recorta el estado que se transmite a los TELÉFONOS. Por defecto viaja el
+   * estado completo, que es lo que necesitan los juegos cuya pantalla de
+   * jugador dibuja la partida (Dardos, Simón, Cubo…).
+   *
+   * Los juegos donde el teléfono es solo un mando —Corta frutas— deben recortar
+   * aquí: el snapshot completo lleva la posición de cada fruta y se emite ~9
+   * veces por segundo, y un teléfono que recibe, parsea y re-renderiza todo eso
+   * tiene menos CPU para lo único que importa, que es mandar la puntería a
+   * tiempo. Devolver un objeto pequeño y ESTABLE también evita reenvíos: el
+   * host no retransmite si la proyección no cambió.
+   */
+  toPlayerState?: (state: unknown) => unknown;
   Thumbnail: ComponentType<{ className?: string }>;
   MonitorComponent: ComponentType<GameMonitorProps<unknown>>;
   PlayerComponent: ComponentType<GamePlayerProps<TInput>>;

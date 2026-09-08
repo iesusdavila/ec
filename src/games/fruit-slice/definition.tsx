@@ -1,5 +1,9 @@
 import type { GameDefinition } from "@/games/types";
-import { createFruitSliceEngine, type FruitSliceInput } from "@/games/fruit-slice/logic";
+import {
+  createFruitSliceEngine,
+  fruitSliceToPlayerState,
+  type FruitSliceInput,
+} from "@/games/fruit-slice/logic";
 import { FruitSliceMonitorView } from "@/games/fruit-slice/MonitorView";
 import { FruitSlicePlayerView } from "@/games/fruit-slice/PlayerView";
 import { FruitSliceThumbnail } from "@/games/fruit-slice/Thumbnail";
@@ -16,6 +20,9 @@ export const fruitSliceDefinition: GameDefinition<FruitSliceInput> = {
   needsCalibration: true,
   duration: { min: 30, max: 120, default: 45, step: 15, unit: "seconds" },
   supportsSplitScreen: true,
+  // El teléfono es solo un mando: no necesita el estado completo y recibirlo le
+  // quitaba CPU para enviar la puntería a tiempo. Ver fruitSliceToPlayerState.
+  toPlayerState: fruitSliceToPlayerState,
   Thumbnail: FruitSliceThumbnail,
   MonitorComponent: FruitSliceMonitorView,
   PlayerComponent: FruitSlicePlayerView,

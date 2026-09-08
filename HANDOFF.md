@@ -304,45 +304,130 @@ Si en el teléfono un juego se siente demasiado sensible o demasiado sordo,
    que **el puntero se movía a trompicones y el juego no cortaba nada**, porque
    el mensaje de corte era justo el que se perdía en el descarte.
 
-   Regla para cualquier control continuo que se añada a otro juego: **muestrea
-   rápido en local, pero envía como mucho ~8 veces por segundo** (throttle con
-   envío de cola, ver `core/utils/throttle.ts`) y deja el resto del presupuesto
-   para los eventos discretos (toques, disparos), que nunca deben ir limitados.
-   **Y para que ~8/s no se vea a tirones, extrapola; no basta con interpolar.**
+   Regla para cualquier control continuo que se añada a otro juego: **el límite
+   es de MENSAJES, no de bytes**. No tires muestras para caber en la cuota:
+   agrúpalas y mándalas juntas, cada una con su marca de tiempo. Ver
+   `AimSample` en `fruit-slice/logic.ts` y el bucle de `PlayerView.tsx`.
+
+   La cuenta de la cuota ya no la lleva cada emisor por su lado con su propio
+   `throttle`, sino `core/realtime/clientEventBudget.ts`, que la mira en una
+   ventana deslizante de un segundo para toda la conexión: los flujos continuos
+   preguntan con `canStream()` y los eventos discretos (jugador listo, cierre
+   de sesión) pasan siempre, con reserva propia. Verificado intentando enviar
+   en cada milisegundo durante 5 s: 45 envíos, **máximo 9 en cualquier ventana
+   de 1 s**, espaciados 100-200 ms (sin ráfagas).
+
+   **Y para que ~9/s no se vea a tirones, extrapola; no basta con interpolar.**
    Interpolar hacia la última posición recibida deja el cursor siempre por
    detrás, porque persigue un punto que ya es viejo: se ve lento por mucho que
    se afine el suavizado. Lo que funciona es que el teléfono mande también su
    VELOCIDAD y el monitor avance el cursor por su cuenta entre mensajes
    (`MAX_EXTRAPOLATION_MS` + `CURSOR_EASE_TAU_MS` en `fruit-slice/logic.ts`),
-   con un tope para que no se escape si dejan de llegar mensajes.
-
-   Medido en navegador con el mismo gesto y la misma tasa de envío (~8,5 msg/s),
-   comparando el salto del percentil 95 contra el salto típico por frame:
-
-   | | paso mediano | p95 | p95/mediano |
-   |---|---|---|---|
-   | Solo interpolando | 0,0040 | 0,0267 | **6,6×** (avanza a rachas) |
-   | Con extrapolación | 0,0085 | 0,0192 | **2,3×** (paso casi uniforme) |
+   con topes de tiempo y de distancia para que no se escape si dejan de llegar
+   mensajes, y con una puerta de velocidad para no extrapolar el ruido del
+   sensor cuando la mano está quieta.
 
    Tercera pata: **posiciona con `transform: translate3d`, no con `left`/`top`**.
    Animar `left`/`top` recalcula layout 60 veces por segundo; un `translate3d`
    lo resuelve el compositor. En modo `fill` el escenario declara
    `container-type: size`, así que `calc(fracción * 100cqw)` convierte las
-   coordenadas 0..1 en píxeles sin medir nada desde React.
+   coordenadas 0..1 en píxeles sin tener que medir nada desde React.
 
-   Nota: el host también emite por encima del límite (`BROADCAST_INTERVAL_MS`
-   70 ms ≈ 14/s + heartbeat + estado de sesión). No causa los síntomas de
-   arriba porque el monitor pinta desde su propio estado local, no desde el
-   broadcast, pero **es deuda real**: los teléfonos reciben menos snapshots de
-   los que se creen. Si algún juego llega a depender de lo que el teléfono
-   pinta, hay que bajar esa frecuencia.
+6. **El hilo principal del teléfono es parte de la latencia de red.** Es la
+   continuación de la trampa anterior y costó más todavía, porque desde el
+   escritorio no se ve: ahí sobra CPU y el síntoma no aparece.
+
+   Los eventos de Pusher salen por el mismo hilo que renderiza React. Si el
+   teléfono está ocupado renderizando, los envíos esperan turno. Corta frutas
+   hacía `setState` con la vista previa 31 veces por segundo, y encima el
+   runtime hacía otro `setState` por cada snapshot del host —el estado
+   completo, con la posición de cada fruta—. Unos 40 renders por segundo en un
+   móvil de gama media: la puntería se quedaba en cola y el jugador percibía
+   **uno o dos segundos** de retardo con la red perfectamente sana.
+
+   Reglas que salieron de ahí:
+
+   - Un control continuo **no usa estado de React en su bucle**. Se escribe el
+     `transform` directamente en el nodo (ver `dotRef` en `PlayerView.tsx`) y
+     se dejan los `setState` para lo esporádico.
+   - Un juego cuyo teléfono es solo un mando **recorta lo que recibe** con
+     `GameDefinition.toPlayerState`. Y como el host no reenvía si la proyección
+     no cambió, un recorte pequeño y estable ahorra además casi toda la cuota.
+
+   Medido en simulación (red 65 ms ± 15 ms, mismo gesto en ambos casos, con el
+   motor y el filtro reales):
+
+   | | desfase medio del cursor | peor caso | msg/s | renders/s en el móvil |
+   |---|---|---|---|---|
+   | Antes | 129 ms | 195 ms | 7,5 | ~40 |
+   | Ahora | **82 ms** | **121 ms** | 8,5 | **0** |
+
+   El host, además, emitía por encima del límite (`BROADCAST_INTERVAL_MS` 70 ms
+   ≈ 14/s + heartbeat + estado de sesión ≈ 16/s), o sea que Pusher le tiraba
+   ~6 mensajes por segundo al azar. Ya no: emite cuando hay cuota y cuando hay
+   algo que contar.
+
+7. **Compensar latencia con una constante es apostar.** El hit-test evaluaba
+   cada objeto donde estaba hace 0, 90 y 180 ms (`LAG_SAMPLES_MS`), números
+   puestos a ojo: en una wifi buena sobran y en datos móviles se quedan cortos,
+   y en ningún caso hay forma de saber cuál era el bueno.
+
+   Ahora se mide, y sin gastar un mensaje extra: el host sella cada snapshot
+   con su reloj, el teléfono devuelve ese sello junto con cuánto tiempo lo tuvo
+   retenido, y el host resta (`core/realtime/clockSync.ts`). Los relojes no
+   necesitan estar sincronizados porque cada resta ocurre dentro de un mismo
+   aparato. La mediana de las últimas muestras es la que compensa el hit-test,
+   y se ve en pantalla en la píldora de latencia del monitor.
 
 ---
 
 ## 8. Cómo se verificó (para repetirlo)
 
-No hay suite de tests. La verificación fue con **Playwright**, instalado y
-desinstalado temporalmente (no está en `package.json` a propósito):
+No hay suite de tests. Se verifica de dos maneras según lo que se toque.
+
+### 8.1 Números (filtros, latencia, cuota, hit-test)
+
+Node 22 ejecuta TypeScript directamente, y las piezas de esta parte no dependen
+de React ni del DOM: `KalmanFilter.ts`, `clientEventBudget.ts`, `clockSync.ts` y
+`fruit-slice/logic.ts` (esta última solo importa un valor, de `clockSync`). Así
+que se copian a un directorio temporal, se les reescribe ese import a una ruta
+relativa y se comparan contra la versión anterior sacada de git:
+
+```bash
+mkdir -p /tmp/verify && cd /tmp/verify
+cp .../src/core/sensors/KalmanFilter.ts .
+cp .../src/core/realtime/clientEventBudget.ts .
+cp .../src/core/realtime/clockSync.ts .
+cp .../src/games/fruit-slice/logic.ts .
+git show HEAD~1:src/games/fruit-slice/logic.ts > logicOld.ts   # el "antes"
+sed -i 's#@/core/realtime/clockSync#./clockSync.ts#' logic.ts
+node --experimental-strip-types harness.ts
+```
+
+Dos detalles que hacen falta: el modo "strip-only" de Node **no admite
+propiedades de parámetro** (`constructor(private x: T)`), hay que expandirlas en
+la copia; y los imports necesitan extensión `.ts` explícita.
+
+Lo que conviene medir ahí, porque es lo que se rompió al hacerlo:
+
+- **Ruido contra retardo del filtro**, con ruido de sensor sintético. La primera
+  versión del Kalman salía *cuatro veces* más ruidosa que el suavizado que venía
+  a sustituir: el NIS de una sola muestra sigue una chi-cuadrado, se pasa del
+  umbral una de cada seis veces solo por ruido, y el filtro se quedaba abierto.
+  Se arregló promediando el NIS antes de decidir.
+- **Cortes accidentales con la mano quieta**, con una bomba justo bajo el
+  puntero. Al pasar a muestreo de 60 Hz, dos muestras separadas 17 ms convierten
+  el ruido del sensor en 0,7 pantallas/s de velocidad falsa, rozando el umbral
+  de barrido: **el 7% de los lotes detonaba la bomba solo**. Por eso la
+  velocidad del gesto se mide sobre una ventana de ~50 ms (`cursor.recent`)
+  aunque el tramo que corta siga siendo el fino. Hoy: 0 de 40 lotes.
+- **Cuota de Pusher**, intentando enviar en cada milisegundo durante 5 s y
+  comprobando el máximo en cualquier ventana de 1 s.
+
+### 8.2 Interfaz y flujo completo
+
+Con **Playwright**, instalado y desinstalado temporalmente (no está en
+`package.json` a propósito):
 
 ```bash
 npm install -D playwright && npx playwright install chromium
@@ -414,9 +499,17 @@ Ronda 5:
 | El puntero aún no se ve fluido, súbele la velocidad | Hecho, pero **no subiendo la frecuencia de envío** (el techo son 10 msg/s de Pusher y ya íbamos a 7). Se añadió extrapolación: el teléfono manda su velocidad junto a la posición y el monitor avanza el cursor solo entre mensajes, así que se dibuja donde la mano está ahora y no donde estaba hace 120 ms. Además el envío subió de 140 a 120 ms (~8,4 msg/s medidos) y todo lo que se mueve pasó a posicionarse con `translate3d` en vez de `left`/`top`. Medido: el salto p95 respecto al paso típico bajó de **6,6× a 2,3×**, a 60 fps y con 5% de frames parados. Ver §7.5. |
 
 Toques de mecánica que vinieron con lo anterior: los objetos vuelan más lento
-(`OBJECT_LIFETIME_MS` 2000 → 2900, hacía falta tiempo para apuntar), el radio
-de corte subió a `0.19`, y el hit-test compensa la latencia de red evaluando
-también dónde estaba el objeto 90 y 180 ms antes (`LAG_SAMPLES_MS`).
+(`OBJECT_LIFETIME_MS` 2000 → 2900, hacía falta tiempo para apuntar) y el radio
+de corte subió a `0.19`.
+
+Ronda 6 (latencia y estabilidad del puntero):
+
+| Pedido | Estado |
+|---|---|
+| Hay uno o dos segundos de retardo desde el teléfono; máximo 0,2 s | Hecho. La red nunca fue el cuello de botella: lo era el **hilo principal del móvil**, con ~40 renders de React por segundo (vista previa a 31/s + un snapshot completo del juego por cada broadcast del host) por delante de los envíos de Pusher en la misma cola. El bucle del puntero ya no toca React —escribe el `transform` en el DOM— y el teléfono ahora recibe un estado recortado (`toPlayerState`) que el host ni siquiera reenvía si no cambió. Medido en simulación con red de 65 ms: desfase del cursor **129 → 82 ms de media, 195 → 121 ms en el peor caso**. Ver §7.6. |
+| El sensor oscila mucho, implementa filtros de Kalman | Hecho: `core/sensors/KalmanFilter.ts`, modelo de velocidad constante y **adaptativo** (se abre solo cuando el NIS indica movimiento real sostenido, no ante un pico de ruido). Da posición y velocidad como un estado conjunto, en vez de derivar la velocidad restando muestras ruidosas —que era justo lo que hacía saltar el cursor, porque el monitor extrapola con ella—. Medido contra el suavizado anterior: temblor en reposo **±3,61% → ±2,78%** de pantalla, velocidad falsa **0,278 → 0,203** pant/s y retardo del filtro ante un gesto **10,5 → 4,1 ms**; las tres a la vez. |
+| Que el corte sea muy preciso | Hecho, por tres vías. (1) El teléfono manda la **trayectoria completa** a 60 Hz dentro del mismo mensaje en vez de un punto cada 120 ms: un barrido en curva sobre una fruta ya no se pierde (verificado). (2) La latencia se **mide** en vez de suponerse (`clockSync.ts`), así que el hit-test evalúa el objeto donde el jugador lo veía; con 250 ms de latencia el corte ahora acierta y antes fallaba (verificado). (3) El toque de pantalla viaja **dentro del lote**, marcado y fechado, así que ya no puede caerse por exceso de cuota como pasaba al tocar rápido. Y una trampa que apareció al muestrear más rápido: a 17 ms entre muestras el ruido del sensor simula un barrido y detonaba bombas solo (7% de los lotes con la mano quieta), así que la velocidad del gesto se mide sobre una ventana de 50 ms aunque el tramo que corta siga siendo el fino. Verificado: 0 de 40. |
+| — | De propina: el monitor muestra la latencia real medida de cada teléfono en el encabezado del juego (verde <120 ms, ámbar <200 ms, rojo por encima). Antes no había forma de saber si el puntero iba raro por la red o por otra cosa. |
 
 ---
 

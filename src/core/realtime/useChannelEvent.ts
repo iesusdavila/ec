@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import type { Channel } from "pusher-js";
+import { clientEventBudget } from "@/core/realtime/clientEventBudget";
 
 /**
  * Se suscribe a un evento de canal mientras el componente está montado y
@@ -32,11 +33,16 @@ export function useChannelEvent<T>(
  * Envía un evento de cliente ("client-*") de forma segura: si el canal aún
  * no está suscrito o los eventos de cliente no están habilitados en el
  * dashboard de Pusher, falla en silencio en vez de romper el juego.
+ *
+ * Todo envío se apunta en `clientEventBudget`, que es lo que permite a los
+ * flujos continuos (puntero, snapshots) saber cuánta cuota queda antes de que
+ * Pusher empiece a descartar mensajes sin avisar. Ver `clientEventBudget.ts`.
  */
 export function sendClientEvent(channel: Channel | null, eventName: string, data: unknown): void {
   if (!channel || !channel.subscribed) return;
   try {
     const sent = channel.trigger(eventName, data);
+    clientEventBudget.record();
     if (!sent && process.env.NODE_ENV !== "production") {
       console.warn(
         `${eventName} no se envió: revisa que "Enable client events" esté activo en el dashboard de Pusher.`

@@ -7,6 +7,14 @@ export interface TiltData {
   alpha: number;
 }
 
+export interface TiltSample extends TiltData {
+  /**
+   * `performance.now()` del evento del sensor que produjo esta lectura. Si no
+   * cambia entre dos consultas, es que aún no ha llegado una medición nueva.
+   */
+  at: number;
+}
+
 export interface AccelerationVector {
   x: number;
   y: number;

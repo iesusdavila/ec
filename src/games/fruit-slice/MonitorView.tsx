@@ -47,6 +47,20 @@ const ICONS: Record<ObjectKind, (props: { className?: string }) => ReactElement>
   bomb: BombIcon,
 };
 
+/**
+ * Latencia (ida) por encima de la cual el indicador avisa. El objetivo del
+ * juego es responder en menos de 0,2 s de punta a punta; 120 ms de red dejan
+ * margen para el muestreo y el pintado. Ver core/realtime/clockSync.ts.
+ */
+const LATENCY_OK_MS = 120;
+const LATENCY_WARN_MS = 200;
+
+function latencyColor(ms: number): string {
+  if (ms <= LATENCY_OK_MS) return "#3ECF8E";
+  if (ms <= LATENCY_WARN_MS) return "#F5C451";
+  return "#FF6B5B";
+}
+
 function shakeOffset(now: number, lastBombAt: number | null): number {
   if (lastBombAt === null) return 0;
   const t = now - lastBombAt;
@@ -66,6 +80,10 @@ export function FruitSliceMonitorView({ state, players }: GameMonitorProps<unkno
   const colorFor = (id: string) => players.find((p) => p.id === id)?.color ?? "#5B8CFF";
   const ranked = Object.entries(fruit.scores).sort((a, b) => b[1] - a[1]);
   const cursorList = Object.values(fruit.cursors);
+  // Latencia real del teléfono más lento. Se muestra porque este juego se
+  // juega o no se juega según ese número, y hasta ahora no había forma de
+  // saberlo: si el puntero va raro, aquí se ve si es la red o es otra cosa.
+  const worstLatency = cursorList.reduce((max, c) => Math.max(max, c.latencyMs), 0);
   // En modo compartido varios cursores conviven en el mismo carril: ahí sí hace
   // falta distinguirlos con un aro del color del jugador y su nombre.
   const sharedMode = !fruit.splitScreen && fruit.lanes.some((l) => l.playerIds.length > 1);
@@ -91,6 +109,13 @@ export function FruitSliceMonitorView({ state, players }: GameMonitorProps<unkno
                 {nameFor(id)}: <span className="font-semibold">{score}</span>
               </span>
             ))}
+          <span
+            className="rounded-full border px-2 py-0.5 font-mono text-xs tabular-nums lg:text-sm"
+            style={{ color: latencyColor(worstLatency), borderColor: latencyColor(worstLatency) }}
+            title="Latencia medida del teléfono al monitor"
+          >
+            {Math.round(worstLatency)} ms
+          </span>
           <span className="font-mono text-2xl tabular-nums lg:text-4xl">
             {Math.ceil(fruit.remainingMs / 1000)}s
           </span>

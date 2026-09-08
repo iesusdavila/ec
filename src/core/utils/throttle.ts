@@ -1,9 +1,12 @@
 /**
- * Limita la frecuencia de envío de eventos en tiempo real (por ejemplo,
- * snapshots de estado de juego). Es importante mantener esto bajo control:
- * los eventos "client-*" de Pusher cuentan contra la cuota del plan
- * gratuito, y un juego con física continua podría fácilmente enviar cientos
- * de mensajes por segundo si no se limita.
+ * Limitador de frecuencia genérico, con envío de cola.
+ *
+ * OJO: **no lo uses para respetar el límite de Pusher.** Para eso está
+ * `core/realtime/clientEventBudget.ts`. Un `throttle` por emisor no sabe lo que
+ * están gastando los demás, y así fue como el host acabó emitiendo 16 mensajes
+ * por segundo contra un límite de 10, con Pusher descartando el resto en
+ * silencio (§7.5 del HANDOFF). Hoy nadie lo usa; queda por si hace falta
+ * limitar algo que no viaje por el canal.
  */
 export function throttle<Args extends unknown[]>(
   fn: (...args: Args) => void,

@@ -6,9 +6,16 @@ import type { GameDefinition, GameEngine, GameLaunchOptions } from "@/games/type
 import type { GameResult, Player } from "@/core/types";
 import { RealtimeEvent } from "@/core/realtime/channel";
 import { sendClientEvent, useChannelEvent } from "@/core/realtime/useChannelEvent";
-import { throttle } from "@/core/utils/throttle";
+import { clientEventBudget } from "@/core/realtime/clientEventBudget";
+import { LatencyEstimator, type ClockEcho } from "@/core/realtime/clockSync";
 
-const BROADCAST_INTERVAL_MS = 70;
+/**
+ * Cada cuánto se REVISA si toca emitir. No es la frecuencia de emisión: quien
+ * manda ahí es `clientEventBudget`, que garantiza no pasarse del límite de
+ * Pusher. Revisar más a menudo que el espaciado mínimo solo sirve para que un
+ * cambio de estado salga cuanto antes en vez de esperar al siguiente hueco.
+ */
+const BROADCAST_CHECK_MS = 25;
 /** Si algún teléfono no avisa que está listo (permiso/calibración) en este
  * tiempo, se arranca de todas formas para no dejar la partida bloqueada. */
 const READY_TIMEOUT_MS = 6000;
@@ -27,6 +34,8 @@ interface PlayerInputMessage {
   playerId: string;
   gameId: string;
   payload: unknown;
+  /** Eco de reloj para medir la latencia de este teléfono (clockSync.ts). */
+  echo?: ClockEcho;
 }
 
 interface PlayerReadyMessage {
@@ -69,6 +78,8 @@ export function GameRuntimeHost({
   const pausedRef = useRef(paused);
   const readyIdsRef = useRef<Set<string>>(new Set());
   const tryBeginRef = useRef<() => void>(() => {});
+  /** Latencia medida por jugador, para que el motor compense la puntería. */
+  const latencyRef = useRef<Map<string, LatencyEstimator>>(new Map());
 
   useEffect(() => {
     pausedRef.current = paused;
@@ -90,14 +101,55 @@ export function GameRuntimeHost({
 
     const requiredIds = players.map((p) => p.id);
 
+    // ---------------------------------------------------------------------
+    // Emisión de snapshots a los teléfonos.
+    //
+    // El motor cambia de estado hasta 60 veces por segundo, pero Pusher solo
+    // admite 10 eventos/s por conexión y descarta el resto EN SILENCIO. Antes
+    // se emitía cada 70 ms (~14/s) más un heartbeat, o sea por encima del
+    // límite: Pusher tiraba mensajes al azar y nadie se enteraba (§7.5).
+    //
+    // Ahora se emite solo cuando hay hueco de cuota Y hay algo que contar:
+    //
+    //  - Se compara la proyección serializada con la última enviada. Si no
+    //    cambió, no se manda: para un juego donde el teléfono es solo un mando
+    //    esto ahorra casi toda la cuota, que es justo lo que hace falta para
+    //    que las entradas del jugador lleguen sin cola.
+    //  - El heartbeat deja de ser un temporizador aparte (que se sumaba a la
+    //    cuota sin saberlo) y pasa a ser una condición más: "hace demasiado
+    //    que no se manda nada, reenvía por si se perdió algo".
+    // ---------------------------------------------------------------------
+    const project = definition.toPlayerState ?? ((state: unknown) => state);
+
     let latestSnapshot: unknown = null;
-    const sendSnapshot = (snapshot: unknown) => {
+    let lastSentJson: string | null = null;
+    let lastSentAt = 0;
+
+    const flushSnapshot = (now: number) => {
+      if (latestSnapshot === null) return;
+      // La cuota se mira PRIMERO: es una comparación de números, mientras que
+      // serializar el estado no lo es. Al revés, el monitor estaría
+      // serializando la partida entera 40 veces por segundo para tirar tres de
+      // cada cuatro resultados.
+      if (!clientEventBudget.canStream(now)) return;
+
+      const payload = project(latestSnapshot);
+      const json = JSON.stringify(payload);
+      const changed = json !== lastSentJson;
+      const stale = now - lastSentAt >= HEARTBEAT_MS;
+      if (!changed && !stale) return;
+
+      lastSentJson = json;
+      lastSentAt = now;
+      clientEventBudget.noteStream(now);
       sendClientEvent(channel, RealtimeEvent.GameState, {
         gameId: definition.id,
-        state: snapshot,
+        state: payload,
+        // Sello de reloj para que los teléfonos puedan devolverlo y el host
+        // mida la latencia real de cada uno. Ver core/realtime/clockSync.ts.
+        t: now,
       });
     };
-    const broadcast = throttle(sendSnapshot, BROADCAST_INTERVAL_MS);
 
     const engine = definition.createEngine({
       players,
@@ -105,14 +157,11 @@ export function GameRuntimeHost({
       onStateChange: (next) => {
         latestSnapshot = next;
         setStateBox({ value: next });
-        broadcast(next);
       },
     });
     engineRef.current = engine;
 
-    const heartbeat = setInterval(() => {
-      if (latestSnapshot !== null) sendSnapshot(latestSnapshot);
-    }, HEARTBEAT_MS);
+    const broadcastTimer = setInterval(() => flushSnapshot(Date.now()), BROADCAST_CHECK_MS);
 
     let started = false;
     let raf = 0;
@@ -155,7 +204,7 @@ export function GameRuntimeHost({
 
     return () => {
       clearTimeout(fallbackTimeout);
-      clearInterval(heartbeat);
+      clearInterval(broadcastTimer);
       cancelAnimationFrame(raf);
       engine.cleanup();
       engineRef.current = null;
@@ -165,7 +214,17 @@ export function GameRuntimeHost({
 
   useChannelEvent<PlayerInputMessage>(channel, RealtimeEvent.PlayerInput, (message) => {
     if (message.gameId !== definition.id || pausedRef.current) return;
-    engineRef.current?.handleInput(message.playerId, message.payload);
+
+    let estimator = latencyRef.current.get(message.playerId);
+    if (!estimator) {
+      estimator = new LatencyEstimator();
+      latencyRef.current.set(message.playerId, estimator);
+    }
+    estimator.addEcho(message.echo, Date.now());
+
+    engineRef.current?.handleInput(message.playerId, message.payload, {
+      latencyMs: estimator.oneWayMs,
+    });
   });
 
   if (waiting) {
