@@ -9,6 +9,42 @@
   --muted: #71717a;
   --accent: #5b8cff;
   --accent-foreground: #ffffff;
+
+  /*
+   * Rampa del azul. Un botón "no seco" no necesita brillo: necesita que se
+   * lea como una SUPERFICIE. Eso son cuatro cosas, todas discretas:
+   *
+   *   - un degradado vertical de ~8% de luminosidad (top -> bottom). Menos, no
+   *     se ve; más, parece un botón de 2010.
+   *   - un borde un punto más oscuro que el relleno, que le da canto.
+   *   - una línea interior clara de 1px arriba, que es como la luz cae sobre
+   *     un plano ligeramente inclinado. Esto es lo que quita lo "plano" sin
+   *     encender nada.
+   *   - una sombra CORTA y teñida de azul (no gris, no glow): apoya el botón
+   *     sobre el fondo en vez de hacerlo flotar.
+   *
+   * Deliberadamente NO hay: resplandor exterior, degradados diagonales,
+   * reflejos, ni transiciones de brillo. Eso es lo "brillante" que no se
+   * quiere.
+   */
+  --accent-top: #6d97ff;
+  --accent-bottom: #4a7bf2;
+  --accent-hover-top: #7ba4ff;
+  --accent-hover-bottom: #5788f8;
+  --accent-edge: #3f6ada;
+  --accent-inner-light: rgba(255, 255, 255, 0.3);
+  --accent-shadow: rgba(58, 99, 214, 0.3);
+  --accent-shadow-tight: rgba(31, 54, 120, 0.22);
+  --focus-ring: rgba(91, 140, 255, 0.45);
+
+  /* Mismos recursos para superficies neutras (secundario / fantasma). */
+  --surface-top: #fbfbfc;
+  --surface-bottom: #ebebee;
+  --surface-hover-top: #ffffff;
+  --surface-hover-bottom: #e2e2e6;
+  --surface-inner-light: rgba(255, 255, 255, 0.9);
+  --surface-shadow: rgba(24, 24, 27, 0.1);
+  --surface-shadow-tight: rgba(24, 24, 27, 0.12);
 }
 
 @theme inline {
@@ -34,6 +70,29 @@
     --muted: #a1a1aa;
     --accent: #6f9fff;
     --accent-foreground: #0a0a0b;
+
+    /*
+     * En oscuro la sombra tiñe menos (sobre negro no se ve) y el trabajo lo
+     * hace el canto: el borde se aclara en vez de oscurecerse, porque sobre un
+     * fondo oscuro el relieve se lee por el borde iluminado, no por la sombra.
+     */
+    --accent-top: #82abff;
+    --accent-bottom: #5d8df5;
+    --accent-hover-top: #93b8ff;
+    --accent-hover-bottom: #6d9aff;
+    --accent-edge: #93b8ff;
+    --accent-inner-light: rgba(255, 255, 255, 0.34);
+    --accent-shadow: rgba(23, 46, 110, 0.55);
+    --accent-shadow-tight: rgba(0, 0, 0, 0.5);
+    --focus-ring: rgba(111, 159, 255, 0.5);
+
+    --surface-top: #2c2c31;
+    --surface-bottom: #201f24;
+    --surface-hover-top: #38383e;
+    --surface-hover-bottom: #29292e;
+    --surface-inner-light: rgba(255, 255, 255, 0.07);
+    --surface-shadow: rgba(0, 0, 0, 0.45);
+    --surface-shadow-tight: rgba(0, 0, 0, 0.5);
   }
 }
 
@@ -53,4 +112,274 @@ button,
 a {
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
+}
+
+/* ===========================================================================
+ * SISTEMA DE BOTONES
+ *
+ * Va en `@layer components` a propósito: así cualquier utilidad de Tailwind
+ * que se pase por `className` sigue ganando (las utilidades están en una capa
+ * posterior). Si esto viviera fuera de una capa, un `className="bg-red-500"`
+ * puntual no tendría efecto y costaría entender por qué.
+ *
+ * Estados, todos por la misma vía para que ningún botón de la app se comporte
+ * distinto: reposo -> hover (sube un punto) -> active (se hunde 1px y pierde
+ * sombra) -> focus-visible (anillo). El "se hunde" es lo que hace que el botón
+ * se sienta pulsado en vez de solo cambiar de color; es la mitad de lo que
+ * antes faltaba.
+ * ======================================================================== */
+@layer components {
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border: 1px solid transparent;
+    font-weight: 550;
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+    cursor: pointer;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    transition:
+      background-image 140ms ease,
+      background-color 140ms ease,
+      border-color 140ms ease,
+      box-shadow 140ms ease,
+      color 140ms ease,
+      transform 90ms ease;
+  }
+
+  .btn:focus-visible {
+    outline: none;
+    /* El anillo se suma a la sombra propia del botón en cada variante. */
+    box-shadow: 0 0 0 3px var(--focus-ring);
+  }
+
+  .btn:disabled {
+    opacity: 0.4;
+    pointer-events: none;
+    box-shadow: none;
+    transform: none;
+  }
+
+  /* --- Primario: el azul ------------------------------------------------- */
+  .btn-primary {
+    color: var(--accent-foreground);
+    background-image: linear-gradient(180deg, var(--accent-top), var(--accent-bottom));
+    border-color: var(--accent-edge);
+    box-shadow:
+      inset 0 1px 0 var(--accent-inner-light),
+      0 1px 1px var(--accent-shadow-tight),
+      0 2px 6px -1px var(--accent-shadow);
+  }
+
+  .btn-primary:hover {
+    background-image: linear-gradient(180deg, var(--accent-hover-top), var(--accent-hover-bottom));
+    box-shadow:
+      inset 0 1px 0 var(--accent-inner-light),
+      0 1px 1px var(--accent-shadow-tight),
+      0 4px 12px -2px var(--accent-shadow);
+  }
+
+  .btn-primary:active {
+    transform: translateY(1px);
+    background-image: linear-gradient(180deg, var(--accent-bottom), var(--accent-bottom));
+    box-shadow:
+      inset 0 1px 2px var(--accent-shadow-tight),
+      0 1px 1px var(--accent-shadow-tight);
+  }
+
+  .btn-primary:focus-visible {
+    box-shadow:
+      inset 0 1px 0 var(--accent-inner-light),
+      0 1px 1px var(--accent-shadow-tight),
+      0 0 0 3px var(--focus-ring);
+  }
+
+  /* --- Secundario: mismo relieve, superficie neutra ----------------------- */
+  .btn-secondary {
+    color: var(--foreground);
+    background-image: linear-gradient(180deg, var(--surface-top), var(--surface-bottom));
+    border-color: var(--border);
+    box-shadow:
+      inset 0 1px 0 var(--surface-inner-light),
+      0 1px 1px var(--surface-shadow-tight);
+  }
+
+  .btn-secondary:hover {
+    background-image: linear-gradient(180deg, var(--surface-hover-top), var(--surface-hover-bottom));
+    box-shadow:
+      inset 0 1px 0 var(--surface-inner-light),
+      0 1px 1px var(--surface-shadow-tight),
+      0 3px 10px -3px var(--surface-shadow);
+  }
+
+  .btn-secondary:active {
+    transform: translateY(1px);
+    background-image: linear-gradient(180deg, var(--surface-bottom), var(--surface-bottom));
+    box-shadow: inset 0 1px 2px var(--surface-shadow-tight);
+  }
+
+  /* --- Fantasma: sin relleno hasta que se toca ---------------------------- */
+  .btn-ghost {
+    color: var(--foreground);
+    background-color: transparent;
+    border-color: var(--border);
+  }
+
+  .btn-ghost:hover {
+    background-color: var(--surface);
+    border-color: var(--muted);
+  }
+
+  .btn-ghost:active {
+    transform: translateY(1px);
+    background-color: var(--surface-strong);
+  }
+
+  /* --- Peligro: el mismo lenguaje, en rojo -------------------------------- */
+  .btn-danger {
+    color: #e5484d;
+    background-color: transparent;
+    border-color: rgba(229, 72, 77, 0.4);
+  }
+
+  .btn-danger:hover {
+    background-color: rgba(229, 72, 77, 0.1);
+    border-color: rgba(229, 72, 77, 0.7);
+  }
+
+  .btn-danger:active {
+    transform: translateY(1px);
+    background-color: rgba(229, 72, 77, 0.16);
+  }
+
+  .btn-danger:focus-visible {
+    box-shadow: 0 0 0 3px rgba(229, 72, 77, 0.35);
+  }
+
+  /* =========================================================================
+   * FICHAS (los selectores redondos de duración y modo)
+   *
+   * Son botones también, así que comparten el mismo relieve y los mismos
+   * estados. Antes se dibujaban a mano en cada sitio con clases sueltas de
+   * Tailwind y ya habían empezado a divergir entre paneles.
+   * ====================================================================== */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border);
+    border-radius: 9999px;
+    padding: 0.375rem 0.875rem;
+    font-size: 0.875rem;
+    font-weight: 550;
+    line-height: 1.2;
+    cursor: pointer;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    color: var(--foreground);
+    background-image: linear-gradient(180deg, var(--surface-top), var(--surface-bottom));
+    box-shadow: inset 0 1px 0 var(--surface-inner-light);
+    transition:
+      background-image 140ms ease,
+      border-color 140ms ease,
+      box-shadow 140ms ease,
+      color 140ms ease,
+      transform 90ms ease;
+  }
+
+  .chip:hover {
+    background-image: linear-gradient(180deg, var(--surface-hover-top), var(--surface-hover-bottom));
+    border-color: var(--muted);
+  }
+
+  .chip:active {
+    transform: translateY(1px);
+  }
+
+  .chip:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px var(--focus-ring);
+  }
+
+  /* Seleccionada. `aria-pressed` en vez de una clase: el estado queda dicho
+     también para un lector de pantalla, no solo pintado. */
+  .chip[aria-pressed="true"] {
+    color: var(--accent-foreground);
+    background-image: linear-gradient(180deg, var(--accent-top), var(--accent-bottom));
+    border-color: var(--accent-edge);
+    box-shadow:
+      inset 0 1px 0 var(--accent-inner-light),
+      0 1px 1px var(--accent-shadow-tight),
+      0 2px 6px -2px var(--accent-shadow);
+  }
+
+  .chip[aria-pressed="true"]:hover {
+    background-image: linear-gradient(180deg, var(--accent-hover-top), var(--accent-hover-bottom));
+  }
+
+  .chip[aria-pressed="true"]:focus-visible {
+    box-shadow:
+      inset 0 1px 0 var(--accent-inner-light),
+      0 0 0 3px var(--focus-ring);
+  }
+
+  /* =========================================================================
+   * TARJETAS DE JUEGO
+   *
+   * Son botones grandes, así que responden como los demás: se hunden al
+   * pulsarlas y tienen anillo de foco. La seleccionada además se marca con un
+   * aro del azul de la app en lugar de solo cambiar de borde, que a un metro
+   * de distancia (esto se ve en un televisor) no se distinguía.
+   * ====================================================================== */
+  .game-card {
+    cursor: pointer;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    transition:
+      background-color 140ms ease,
+      border-color 140ms ease,
+      box-shadow 140ms ease,
+      transform 90ms ease;
+  }
+
+  .game-card:hover {
+    box-shadow: 0 4px 14px -6px var(--surface-shadow);
+  }
+
+  .game-card:active {
+    transform: translateY(1px);
+  }
+
+  .game-card:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px var(--focus-ring);
+  }
+
+  .game-card[aria-pressed="true"] {
+    box-shadow:
+      inset 0 0 0 1px var(--accent),
+      0 4px 16px -8px var(--accent-shadow);
+  }
+
+  .game-card[aria-pressed="true"]:focus-visible {
+    box-shadow:
+      inset 0 0 0 1px var(--accent),
+      0 0 0 3px var(--focus-ring);
+  }
+}
+
+/* Nadie quiere que la pantalla dé saltos si pidió menos movimiento. */
+@media (prefers-reduced-motion: reduce) {
+  .btn,
+  .chip {
+    transition-duration: 1ms;
+  }
+
+  .btn:active,
+  .chip:active {
+    transform: none;
+  }
 }

@@ -253,15 +253,19 @@ export default function MonitorPage() {
           botón de iniciar fuera de la pantalla. */}
       <div className="flex w-full min-h-0 flex-1 flex-col items-center gap-3 overflow-y-auto lg:gap-5">
         <p className="shrink-0 text-muted lg:text-xl">Elige un juego</p>
-        <GameGrid
-          games={games}
-          selectedId={store.selectedGameId}
-          playerCount={players.length}
-          onSelect={handleSelectGame}
-        />
-        {selectedGame && (selectedGame.duration || selectedGame.supportsSplitScreen) ? (
-          <GameOptionsPanel game={selectedGame} options={gameOptions} onChange={setGameOptions} />
-        ) : null}
+        {/* Cuadrícula y opciones en paralelo: las opciones son una columna
+            lateral en pantalla ancha y vuelven debajo cuando no cabe. */}
+        <div className="flex w-full flex-col items-center gap-3 lg:flex-row lg:items-start lg:justify-center lg:gap-5">
+          <GameGrid
+            games={games}
+            selectedId={store.selectedGameId}
+            playerCount={players.length}
+            onSelect={handleSelectGame}
+          />
+          {selectedGame && (selectedGame.duration || selectedGame.supportsSplitScreen) ? (
+            <GameOptionsPanel game={selectedGame} options={gameOptions} onChange={setGameOptions} />
+          ) : null}
+        </div>
       </div>
 
       <div className="flex shrink-0 flex-col items-center gap-2">
