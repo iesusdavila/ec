@@ -431,8 +431,11 @@ calibrados contra un teléfono real:
   de la habitación**: cuanto más lejos esté aquello a lo que apunta la cámara,
   más movimiento real hace falta. Si va lento, baja el número; si se dispara,
   súbelo. `/dev/posicion` existe para ajustarlo sin entrar a una partida.
-- Corta frutas en modo AR: `XR_HALF_RANGE_M = 0.3` en `XrPoseTracker.ts`. Ahí sí
-  son metros de verdad, porque ARCore da escala real.
+- Corta frutas en modo AR: `XR_HALF_RANGE_M = 0.26` en `XrPoseTracker.ts`. Ahí
+  sí son metros de verdad, porque ARCore da escala real. **Va emparejado con
+  `AIM_HALF_RANGE`: si tocas uno, toca el otro.** Son dos caminos distintos
+  para lo mismo, y es fácil arreglar uno y dejar el otro atrás — pasó con los
+  ajustes de la ronda 8 y hubo que volver a por el de AR.
 - Corta frutas, plan B de inclinación: `AIM_RANGE_DEG = 24` en `PlayerView.tsx`;
   `SLICE_RADIUS = 0.19` en `logic.ts`. Si cuesta acertar, sube `SLICE_RADIUS`.
 

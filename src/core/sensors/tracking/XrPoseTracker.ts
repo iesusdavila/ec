@@ -23,11 +23,23 @@ import type { PositionSample, PositionTracker } from "@/core/sensors/tracking/ty
 /**
  * Metros desde el centro hasta el borde del escenario. A diferencia del flujo
  * óptico, aquí SÍ hay escala real, así que esto es una distancia de verdad:
- * 30 cm a cada lado, un gesto de hombro cómodo.
+ * 26 cm a cada lado, un gesto de hombro cómodo.
+ *
+ * Equivale a `AIM_HALF_RANGE` de `OpticalFlowTracker.ts` y hay que moverlos
+ * A LA VEZ. Estaba en 30 cm y se bajó un 15% junto con el otro, tras probarlo
+ * en un teléfono real: el recorrido pedía demasiado brazo.
  */
-const XR_HALF_RANGE_M = 0.3;
+const XR_HALF_RANGE_M = 0.26;
 
-const CLAMP = 0.5 + 0.08;
+/**
+ * Recorte, EXACTAMENTE en el borde del escenario.
+ *
+ * Estuvo en 0,58 —medio escenario más un margen del 8%— igual que en el flujo
+ * óptico, y por la misma razón hubo que quitarle el margen: eran unos 4 cm de
+ * movimiento, ya fuera del borde, en los que el punto no reaccionaba al volver.
+ * Pasado el borde no se mueve nada, y en cuanto vuelves se mueve otra vez.
+ */
+const CLAMP = 0.5;
 
 interface Vec3 {
   x: number;
