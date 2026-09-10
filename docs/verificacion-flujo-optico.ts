@@ -244,6 +244,32 @@ console.log("\n5) Imagen girada / espejada (varía de un teléfono a otro)");
   }
 }
 
+// --- 6. Movimiento ACOPLADO: girar y trasladar siempre a la vez -----------
+//
+// Es lo que pasa de verdad al llegar al límite del alcance del brazo: uno gira
+// la muñeca y desplaza el teléfono juntos y siempre igual. Dos señales
+// correlacionadas son inseparables por mínimos cuadrados, así que la sospecha
+// es que la regresión se traga la traslación dentro de M y acaba cancelando el
+// movimiento del jugador (síntoma: el cursor se queda clavado en el borde y
+// solo vuelve pulsando "Recentrar", que resetea la regresión).
+//
+// Esta prueba existe para AVERIGUAR si eso pasa de verdad, no para darlo por
+// hecho: mide si el tx reportado decae con el tiempo bajo movimiento acoplado.
+console.log('\n6) Girar y trasladar acoplados (límite del alcance del brazo)');
+{
+  const r = 0.012;
+  // La guiñada acompaña siempre a la traslación, con la misma forma.
+  const steps: Step[] = Array.from({ length: 400 }, () => ({ tx: r, yaw: 0.03 }));
+  const { out, model } = run(steps, false);
+  const inicio = mean(out.slice(20, 60).map((s) => s.tx));
+  const final = mean(out.slice(340, 390).map((s) => s.tx));
+  console.log(`   tx al principio=${inicio.toFixed(4)}  al final=${final.toFixed(4)}` +
+    `  focal aprendida=${model ? Math.hypot(model.yaw.x, model.yaw.y).toFixed(1) : '?'}` +
+    ` (real ${F_TRUE})`);
+  check('el movimiento acoplado NO se cancela con el tiempo', final, inicio, Math.abs(inicio) * 0.35);
+  check('sigue reportando traslación (no se queda clavado)', Math.abs(final), r, r * 0.6);
+}
+
 console.log(
   failures === 0 ? "\nTODAS LAS COMPROBACIONES PASAN" : `\n${failures} COMPROBACIONES FALLAN`
 );

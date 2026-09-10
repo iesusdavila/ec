@@ -55,7 +55,9 @@ src/
 │   ├── darts/                      Dardos
 │   ├── race/                        Carrera
 │   ├── balance-maze/                 Laberinto de equilibrio
-│   └── cube3d/                        Experimento 3D (Three.js)
+│   ├── tower-climb/                   Torre infinita (mando de botones)
+│   ├── bomb-arena/                     Pólvora (mando de botones)
+│   └── cube3d/                          Experimento 3D (Three.js)
 │
 └── components/             UI compartida (botones, PIN, lista de jugadores…)
 ```
@@ -131,6 +133,16 @@ sirve para calibrarla sin entrar a una partida, y
 `node --experimental-strip-types docs/verificacion-flujo-optico.ts` comprueba la
 matemática con imágenes sintéticas.
 
+### El teléfono como mando
+
+Torre infinita y Pólvora no usan sensores: el teléfono es un puñado de botones
+y nada más. Los dos comparten `games/runtime/GamepadPlayerView.tsx` (los
+botones, con respuesta local inmediata) y `games/runtime/padInput.ts` (el
+protocolo). Ese protocolo manda en cada mensaje **qué está pulsado ahora** y
+**qué se pulsó desde el envío anterior**: lo segundo hace falta porque los
+envíos van agrupados para respetar la cuota de Pusher, y entre dos envíos cabe
+un toque entero — sin eso, en un juego de saltar se perderían saltos.
+
 ### Motor de juego
 
 Cada juego expone un `GameDefinition` con un `createEngine()` que produce un
@@ -157,6 +169,8 @@ código de los demás.
 | Dardos | 1–5 | Mantener presionado + inclinar para apuntar, soltar para lanzar | Tiros por jugador (3–9) |
 | Carrera | 2–5 | Agitar para avanzar, inclinar para cambiar de carril | Duración (30–120s; la pista crece con el tiempo elegido) |
 | Laberinto de equilibrio | 1–4 | Inclinación (orientación / giroscopio) | Duración (30–180s; encadena niveles mientras quede tiempo) |
+| Torre infinita | 1–4 | Botones: ◀ ▶ y saltar. Todos trepan la misma torre y la cámara sube sola; quien se queda abajo pierde una vida | Duración (45–150s) |
+| Pólvora | 2–4 | Botones: cruceta y bomba. Rompe bloques, recoge mejoras y deja al resto sin salida; al final la arena se cierra en espiral | Duración (60–180s) |
 | Cubo 3D (experimental) | 1–2 | Inclinación (orientación) | Duración (20–90s) |
 
 Simón dice usa botones en vez de sensores a propósito: detectar 8 direcciones

@@ -62,10 +62,13 @@ const F0 = FLOW_W / 2 / Math.tan((65 * Math.PI) / 180 / 2);
  * digamos 40— tardaría horas en ser superado: la focal se quedaría clavada en
  * la estimada y la compensación de giro nunca sería exacta.
  *
- * 0,004 equivale a un segundo de rotación suave: manda al principio, y en un
- * par de segundos de juego normal las medidas reales pesan más que él.
+ * El valor se eligió midiendo la convergencia desde un previo MÁXIMAMENTE
+ * equivocado (una cámara que entregara la imagen girada 180°, el peor caso
+ * posible): con 0,004 tardaba ~13 s en converger, y con 0,0005 tarda ~4 s, sin
+ * perder nada en el caso normal. El previo sigue cubriendo los primeros
+ * fotogramas, que es para lo único que está.
  */
-const PRIOR_WEIGHT = 0.004;
+const PRIOR_WEIGHT = 0.0005;
 /**
  * Rango de focal creíble en píxeles del nivel fino: de un teleobjetivo
  * imposible (~30° de campo) a un gran angular extremo (~120°). Fuera de aquí,
@@ -83,6 +86,52 @@ const FORGET = 0.997;
 const MIN_VARIANCE = 12;
 /** Confianza mínima para dejar que un frame actualice la regresión. */
 const MIN_CONFIDENCE_FOR_FIT = 0.4;
+/**
+ * La regresión se ajusta sobre las FLUCTUACIONES del giro, no sobre su valor
+ * absoluto. Esta es la constante de tiempo (en fotogramas, a ~30 fps ≈ 2 s) del
+ * promedio que se resta para obtenerlas.
+ *
+ * ESTO ARREGLA UN FALLO REAL, encontrado probando en un teléfono. Al llegar al
+ * límite del alcance del brazo uno gira la muñeca y traslada el teléfono A LA
+ * VEZ Y SIEMPRE IGUAL. Dos señales correlacionadas son inseparables por mínimos
+ * cuadrados, así que la regresión metía la traslación DENTRO de M; a partir de
+ * ahí M sobrecompensaba y cancelaba el movimiento real. Medido en el arnés
+ * (§8.1): con movimiento acoplado el desplazamiento reportado caía de 0,0011 a
+ * 0,0001 —contra un valor real de 0,012— y la focal aprendida se iba de 62 a
+ * 36. En la mano, eso es el cursor clavado en el borde hasta pulsar
+ * "Recentrar", que resetea la regresión.
+ *
+ * La parte CONSTANTE del giro es justo la que arrastra el acoplamiento;
+ * quitándola queda el temblor natural de la mano, que no está correlacionado
+ * con hacia dónde se mueve el brazo y por tanto sí identifica M limpiamente.
+ * Con movimiento perfectamente acoplado no se aprende nada nuevo —la
+ * información no está ahí— y se conserva el modelo anterior, que es la única
+ * respuesta correcta.
+ *
+ * La constante de tiempo importa: tiene que ser bastante más lenta que el
+ * temblor de la mano (~1-3 Hz) para no borrarlo, y bastante más rápida que una
+ * partida para que sí borre el acoplamiento sostenido.
+ */
+const FLUCTUATION_TAU_FRAMES = 60;
+/**
+ * Fotogramas antes de fiarse del promedio de arriba y empezar a ajustar.
+ *
+ * No hace falta esperar a que el promedio converja del todo: con 20 fotogramas
+ * ya distingue lo constante de lo fluctuante, y empezar antes acelera bastante
+ * la convergencia cuando el valor previo resulta estar equivocado.
+ *
+ * Que se pueda empezar tan pronto depende de que el promedio sea la MEDIA REAL
+ * desde el primer fotograma y no una exponencial arrancada en cero: ver
+ * `baselineAlpha()`. Con la exponencial cruda, los primeros fotogramas dejaban
+ * pasar toda la componente constante y el estimador se envenenaba justo con el
+ * caso que esto viene a evitar.
+ */
+const BASELINE_WARMUP_FRAMES = 20;
+/**
+ * Flujo de rotación mínimo, en píxeles, para que un fotograma enseñe algo sobre
+ * M. Por debajo el giro es del orden del ruido y solo ensuciaría la estimación.
+ */
+const MIN_ROTATION_FLOW_PX = 0.35;
 
 export interface FlowResult {
   /**
@@ -124,6 +173,15 @@ export class FlowEstimator {
   private prevRotY = 0;
   private hasPrevRot = false;
 
+  // Promedio lento del giro y del flujo por fotograma. Ver
+  // FLUCTUATION_TAU_FRAMES: la regresión se ajusta sobre lo que se aparta de
+  // estos promedios, no sobre los valores crudos.
+  private gBarX = 0;
+  private gBarY = 0;
+  private mBarX = 0;
+  private mBarY = 0;
+  private baselineCount = 0;
+
   // Acumuladores de la regresión: `a*` es Σ g·gᵀ y `b*` es Σ g·mᵀ.
   private a00 = 0;
   private a01 = 0;
@@ -141,6 +199,11 @@ export class FlowEstimator {
     this.prevFine = null;
     this.prevCoarse = null;
     this.hasPrevRot = false;
+    this.gBarX = 0;
+    this.gBarY = 0;
+    this.mBarX = 0;
+    this.mBarY = 0;
+    this.baselineCount = 0;
     this.seedPrior();
   }
 
@@ -240,18 +303,42 @@ export class FlowEstimator {
         ? Math.max(0, Math.min(1, 1 - match.bestCost / match.worstCost))
         : 1;
 
-    // Actualizar la regresión SOLO con frames donde hay rotación: son los que
-    // informan sobre M. En un frame de traslación pura, `m` no tiene nada que
-    // ver con `g` y solo metería ruido en la estimación.
-    const gMag2 = gx * gx + gy * gy;
-    if (confidence > MIN_CONFIDENCE_FOR_FIT && gMag2 > 1e-6) {
-      this.a00 = this.a00 * FORGET + gx * gx;
-      this.a01 = this.a01 * FORGET + gx * gy;
-      this.a11 = this.a11 * FORGET + gy * gy;
-      this.b0x = this.b0x * FORGET + gx * match.dx;
-      this.b1x = this.b1x * FORGET + gy * match.dx;
-      this.b0y = this.b0y * FORGET + gx * match.dy;
-      this.b1y = this.b1y * FORGET + gy * match.dy;
+    // Promedio lento del giro y del flujo, para poder trabajar con sus
+    // fluctuaciones. Ver FLUCTUATION_TAU_FRAMES y `baselineAlpha()`.
+    this.baselineCount++;
+    const alpha = baselineAlpha(this.baselineCount);
+    this.gBarX += (gx - this.gBarX) * alpha;
+    this.gBarY += (gy - this.gBarY) * alpha;
+    this.mBarX += (match.dx - this.mBarX) * alpha;
+    this.mBarY += (match.dy - this.mBarY) * alpha;
+
+    // La regresión se ajusta SOLO sobre la parte fluctuante, y solo cuando esa
+    // parte es un giro de verdad y no ruido. Un fotograma de traslación pura no
+    // dice nada sobre M; uno de giro acoplado a la traslación, tampoco.
+    const gTildeX = gx - this.gBarX;
+    const gTildeY = gy - this.gBarY;
+    const previous = this.getModel();
+    const rotFlow = previous
+      ? Math.hypot(
+          previous.pitch.x * gTildeX + previous.yaw.x * gTildeY,
+          previous.pitch.y * gTildeX + previous.yaw.y * gTildeY
+        )
+      : 0;
+
+    if (
+      confidence > MIN_CONFIDENCE_FOR_FIT &&
+      this.baselineCount >= BASELINE_WARMUP_FRAMES &&
+      rotFlow > MIN_ROTATION_FLOW_PX
+    ) {
+      const mTildeX = match.dx - this.mBarX;
+      const mTildeY = match.dy - this.mBarY;
+      this.a00 = this.a00 * FORGET + gTildeX * gTildeX;
+      this.a01 = this.a01 * FORGET + gTildeX * gTildeY;
+      this.a11 = this.a11 * FORGET + gTildeY * gTildeY;
+      this.b0x = this.b0x * FORGET + gTildeX * mTildeX;
+      this.b1x = this.b1x * FORGET + gTildeY * mTildeX;
+      this.b0y = this.b0y * FORGET + gTildeX * mTildeY;
+      this.b1y = this.b1y * FORGET + gTildeY * mTildeY;
     }
 
     const model = this.getModel();
@@ -286,6 +373,21 @@ export class FlowEstimator {
       confidence,
     };
   }
+}
+
+/**
+ * Peso de la muestra n en el promedio móvil.
+ *
+ * Arranca como media aritmética exacta (1/n) y va cediendo a la exponencial
+ * (1/τ) según se acumulan muestras. Es el truco estándar de "arranque en
+ * caliente", y aquí no es cosmético: una exponencial arrancada en cero tarda
+ * decenas de fotogramas en alcanzar el valor real, y durante ese rato deja
+ * pasar entera la componente constante del giro —justo la que arrastra el
+ * acoplamiento que esto viene a filtrar—. Medido: sin esto, un movimiento
+ * acoplado desde el primer fotograma envenenaba el modelo igual que antes.
+ */
+function baselineAlpha(n: number): number {
+  return Math.max(1 / FLUCTUATION_TAU_FRAMES, 1 / n);
 }
 
 /** Normaliza a media cero y construye el nivel grueso de la pirámide. */

@@ -21,25 +21,33 @@ import type { PositionSample, PositionTracker } from "@/core/sensors/tracking/ty
  * equivale a MEDIO escenario.
  *
  * Para traducirlo: en un salón donde la cámara trasera enfoca la pared de
- * enfrente a ~2,5 m, 0,13 × 2,5 ≈ 32 cm de movimiento real para ir del centro
+ * enfrente a ~2,5 m, 0,113 × 2,5 ≈ 28 cm de movimiento real para ir del centro
  * al borde — un gesto de hombro cómodo, que es lo que se buscaba.
+ *
+ * Estaba en 0,13 y se bajó un 15% tras probarlo en un teléfono real: el
+ * recorrido pedía demasiado brazo.
  *
  * Si el juego se siente lento, BAJA este número; si el cursor se dispara, súbelo.
  * Depende de la habitación: cuanto más lejos esté aquello a lo que apunta la
  * cámara, más movimiento real hace falta para el mismo recorrido en pantalla.
  */
-const AIM_HALF_RANGE = 0.13;
+const AIM_HALF_RANGE = 0.113;
 
 /**
- * Margen fuera del escenario que se le permite al acumulador.
+ * Recorte del acumulador, EXACTAMENTE en el borde del escenario.
  *
- * Recortar AQUÍ, y no solo al dibujar, es lo que evita el efecto "cuerda": si
- * el jugador sigue moviendo el teléfono más allá del borde, sin recorte el
- * acumulador se iría a 2,0 y al volver habría que deshacer todo ese recorrido
- * fantasma antes de que el cursor se moviera. Es el mismo razonamiento que
- * `clampToStage` en la vista del jugador.
+ * Recortar aquí, y no solo al dibujar, es lo que evita el efecto "cuerda": sin
+ * recorte, seguir moviendo el teléfono más allá del borde llevaría el
+ * acumulador a 2,0, y al volver habría que deshacer todo ese recorrido fantasma
+ * antes de que el cursor se moviera.
+ *
+ * Estuvo en 0,58 —medio escenario más un margen del 8%— y el margen se quitó
+ * porque se notaba: eran unos 4 cm de movimiento del teléfono, ya fuera del
+ * borde, en los que el punto no reaccionaba al volver. El comportamiento
+ * pedido es literal: pasado el borde no se mueve nada, y en cuanto vuelves se
+ * mueve otra vez, sin zona muerta.
  */
-const CLAMP = 0.5 + 0.08;
+const CLAMP = 0.5;
 
 /** Por debajo de esto, la medida del worker no es de fiar. */
 const MIN_CONFIDENCE = 0.25;

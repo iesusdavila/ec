@@ -178,6 +178,8 @@ añade el selector compartido/dividido (solo lo usa Corta frutas).
 | Dardos | Mantener presionado + inclinar, soltar | Tiros 3–9 | Sí | **No** |
 | Carrera | Agitar + inclinar | Duración 30–120s | Parcial | **No** |
 | Laberinto | Inclinar | Duración 30–180s | Sí | **No** |
+| Torre infinita | Botones (◀ ▶ saltar) | Duración 45–150s | Sí (E2E: el mando mueve al personaje; 18 comprobaciones de motor) | **No** |
+| Pólvora | Botones (cruceta + bomba) | Duración 60–180s | Sí (E2E: las bombas matan y la partida acaba; 24 comprobaciones de motor) | **No** |
 | Cubo 3D | Inclinar | Duración 20–90s | Renderiza en headless | **No — ver §6** |
 
 Detalles relevantes:
@@ -311,6 +313,77 @@ grande el bug de retardo de §7.6.
 - La página de depuración `/dev/posicion` (solo en desarrollo) muestra qué
   rastreador se eligió y las lecturas en vivo, y deja el servicio en
   `window.__positionTracking` para trastear desde la consola del teléfono.
+
+### 5.2 Los dos juegos de mando (ronda 8)
+
+Pedido: dos juegos multijugador donde el teléfono sea **solo botones**, nada
+más en pantalla. Se hicieron a propósito lo más distintos posible entre sí:
+uno de reflejos y otro de cabeza.
+
+**Torre infinita** (`src/games/tower-climb/`) — todos trepan la MISMA torre y
+la cámara sube sola: sigue al que va primero y además tiene una velocidad
+mínima que crece. Quien se queda abajo sale por el borde y pierde una vida (de
+tres). Es lo que lo hace multijugador de verdad y no varias partidas de un
+jugador en la misma pantalla: **el que va delante decide el ritmo de todos**.
+Plataformas normales, móviles, que se rompen, muelles y hielo; y se puede
+rebotar en la cabeza de otro. Mando: ◀ ▶ y saltar.
+
+**Pólvora** (`src/games/bomb-arena/`) — arena de 13×11 casillas, bloques
+rompibles, mejoras (más bombas, más alcance, más velocidad), detonación en
+cadena y muerte súbita que va cerrando la arena en espiral al final de la
+ronda, para que la partida termine siempre en enfrentamiento y no por reloj.
+Mando: cruceta + bomba.
+
+#### Lo que comparten
+
+- **`runtime/GamepadPlayerView.tsx`** — el teléfono como mando y nada más. El
+  botón se ilumina y vibra en el mismo `pointerdown`, sin esperar a la red: eso
+  es lo que hace que se sienta inmediato aunque el monitor vaya unas decenas de
+  ms por detrás.
+- **`runtime/padInput.ts`** — el protocolo. Cada mensaje lleva DOS cosas: qué
+  está pulsado ahora (`h`, estado absoluto, se autocorrige si se pierde un
+  mensaje) y qué se pulsó desde el último envío (`p`, acumulativo). Lo segundo
+  es imprescindible: con la cuota de Pusher los envíos van agrupados, y entre
+  dos envíos cabe un toque entero de 60 ms. Mandando solo "qué está pulsado
+  ahora", ese salto se perdería — y en un juego de saltar, perder saltos es
+  perder el juego.
+
+#### Trampas que costaron encontrar
+
+- **`React.memo` en la vista del monitor deja el juego congelado.** El motor
+  muta su estado EN EL SITIO por rendimiento, así que la prop `state` es
+  siempre el mismo objeto: `memo` la da por sin cambios y no vuelve a pintar
+  nunca. La partida seguía por dentro —Pólvora llegaba a terminar con
+  ganador— mientras la pantalla se quedaba clavada en el primer fotograma, con
+  el reloj incluido. Lo mismo vale para `useMemo` con el estado en las
+  dependencias. **No memoizar estas vistas**; memoizar sí los subcomponentes
+  que reciben datos primitivos (`Grid` en Pólvora).
+- **La subida forzada de la cámara no puede sumarse al seguimiento.** En Torre,
+  la cámara sumaba su velocidad mínima POR ENCIMA de la posición del líder, así
+  que acababa adelantándolo y se lo comía por muy bien que jugara: un bot capaz
+  de subir 302 unidades acababa igual sin vidas. Ahora hay un tope
+  (`CAMERA_MIN_LEAD`) y la presión castiga a quien se queda atrás, no a quien
+  va primero.
+- **Reaparecer regalaba puntuación.** Al perder una vida se reaparece cerca del
+  borde inferior de la cámara, que puede estar mucho más arriba de donde caíste.
+  Sin descontarlo, morir SUBÍA la puntuación: en una partida de prueba ganó el
+  jugador que no tocó un botón. Ahora se descuenta (`liftedByRespawn`), y
+  además no se reaparece sobre muelles, que disparaban al jugador hacia arriba
+  por su cuenta.
+- **Las plataformas móviles tienen que guardar su posición ACTUAL** en el
+  estado, no la de origen, o el monitor las dibuja donde no están.
+- **Las plataformas que se rompen deben volver.** Sin eso, romper una podía
+  dejar un hueco de dos bandas —24 unidades sobre un salto de 18— y quien
+  estuviera debajo se quedaba encerrado sin forma de subir.
+
+#### Qué NO está probado
+
+Ningún humano ha jugado a estos juegos todavía. Verificado están el motor (18
+y 24 comprobaciones, §8.1) y la cadena completa monitor↔teléfono con Playwright,
+pero la sensación —si el salto responde bien con la latencia real de Pusher, si
+la torre da la dificultad justa, si la arena se cierra demasiado pronto— pide
+una partida de verdad. Las perillas están en la cabecera de cada `logic.ts`.
+
 
 ---
 
@@ -517,6 +590,26 @@ mirar a ojo en un teléfono):
 node --experimental-strip-types docs/verificacion-flujo-optico.ts
 ```
 
+Los motores de los dos juegos de mando tienen el suyo, y esos sí necesitan el
+resolvedor de alias (importan `@/games/runtime/padInput`):
+
+```bash
+node --import ./docs/alias-loader.mjs --experimental-strip-types docs/verificacion-torre.ts
+node --import ./docs/alias-loader.mjs --experimental-strip-types docs/verificacion-polvora.ts
+```
+
+`docs/alias-loader.mjs` enseña a Node a resolver `@/...` a `src/...`, así que un
+arnés importa **del árbol de verdad** en vez de una copia. Sustituye al baile de
+copiar a un temporal y reescribir imports con `sed` que se describe más abajo;
+ese sigue funcionando, pero ya no hace falta.
+
+De lo que encontraron, lo que más vale la pena saber: en Torre, que la torre SE
+PUEDA subir no se fía a que un bot lo consiga —su resultado varía demasiado de
+una ejecución a otra para servir de criterio, y ajustar el juego para contentar
+al bot sería justo lo que no hay que hacer— sino a una comprobación **geométrica**
+banda a banda sobre 40 torres. El bot se conserva como diagnóstico, sin
+aserciones sobre su ritmo.
+
 Fabrica una textura y recorta "fotogramas" de ella; mover la ventana de recorte
 equivale exactamente a que la escena se desplace, así que la respuesta correcta
 se conoce con precisión de subpíxel. Comprueba el signo y la magnitud de la
@@ -640,22 +733,35 @@ Ronda 7 (rastreo de posición del teléfono):
 |---|---|
 | "Siempre tengo que tener el teléfono quieto y solo girarlo, como el joystick de un play. Quiero mover el teléfono literalmente por el espacio y que el juego lo siga, solo en X e Y" | Hecho, con cámara. Antes hubo que descartar el camino evidente: con el acelerómetro **es imposible**, la doble integración deriva 1,07 m en 5 s sobre un espacio de juego de 50-60 cm, y ningún sensor de navegador ni de Android da posición (ver §5.1). Se implementaron dos rastreadores: ARCore vía WebXR cuando existe, y flujo óptico propio —con la rotación descontada por giroscopio— como red universal, con la inclinación de siempre como plan B si ninguno arranca. Verificado: la matemática con imágenes sintéticas (22 comprobaciones, §8.1) y la cadena completa en Chromium con cámara falsa de movimiento conocido. **Falta la prueba en un teléfono real.** |
 
+Ronda 8 (ajustes del puntero y dos juegos nuevos):
+
+| Pedido | Qué se hizo |
+|---|---|
+| "El puntero va muy lento, un quince por ciento más rápido" | Hecho: `AIM_HALF_RANGE` 0,13 → 0,113 en `OpticalFlowTracker.ts`. Ahora son ~28 cm del centro al borde en vez de ~32. |
+| "Al llegar al borde se queda trabado y tengo que recentrar; quiero que simplemente no se mueva y que al volver se mueva otra vez" | Hecho, y eran **dos** fallos distintos. (1) El acumulador se recortaba en ±0,58 mientras la pantalla acaba en ±0,5: 8% de pantalla —unos 4 cm— en los que te movías y no pasaba nada. Ahora el recorte es exacto. (2) El de fondo: al llegar al límite del alcance del brazo uno gira la muñeca y traslada el teléfono a la vez y siempre igual, y dos señales correlacionadas son inseparables por mínimos cuadrados, así que la regresión se tragaba la traslación dentro de la matriz de rotación y acababa cancelando el movimiento real. Medido en el arnés: el desplazamiento reportado caía de 0,0011 a **0,0001** contra un valor real de 0,012, y la focal aprendida se iba de 62 a 36 — en la mano, eso es el cursor clavado hasta pulsar "Recentrar", que resetea la regresión. Arreglado ajustando la regresión sobre las **fluctuaciones** del giro y no sobre su valor absoluto: ahora se mantiene estable en 0,0083 y el modelo se niega a aprender de datos inseparables en vez de envenenarse. |
+| "Dos juegos multijugador nuevos, controlados solo con botones, muy elaborados" | Hecho: **Torre infinita** (carrera vertical de plataformas, la cámara sube y quien se queda atrás cae) y **Pólvora** (arena de bombas por casillas, con mejoras, cadenas y muerte súbita en espiral). Ver §5.2. Verificado: 18 y 24 comprobaciones de motor, más la cadena completa monitor↔teléfono con Playwright. **Falta jugarlos con personas.** |
+
 ## 10. Si vas a seguir tú
 
 Orden sugerido:
 
 1. **Probar en un teléfono real vía HTTPS** (Vercel es lo más rápido). Es la
    única forma de validar §6.2 y de saber si §6.1 sigue vivo.
-2. **Ajustar `AIM_HALF_RANGE` de Corta frutas con el teléfono en la mano**
+2. **Jugar una partida de verdad a Torre infinita y a Pólvora.** Los motores
+   están verificados y la cadena monitor↔teléfono también, pero nadie ha jugado
+   todavía: la sensación del salto con la latencia real, la dificultad de la
+   torre y el ritmo de la muerte súbita solo se saben jugando. Las perillas
+   están al principio de cada `logic.ts`.
+3. **Ajustar `AIM_HALF_RANGE` de Corta frutas con el teléfono en la mano**
    (usar `/dev/posicion`, que muestra qué rastreador se eligió y las lecturas
    en vivo). Es el único número del rastreo que no se puede elegir a ciegas:
    depende de la habitación. Comprobar también lo que no se ha podido probar
    sin teléfono: que girar la muñeca ya no mueva el cursor, y si un barrido
    rápido rompe el seguimiento.
-3. Ajustar umbrales de sensores con datos reales (usar `/dev/sensores`, que
+4. Ajustar umbrales de sensores con datos reales (usar `/dev/sensores`, que
    muestra inclinación, aceleración y gestos en vivo).
-4. Decidir qué hacer con el cubo 3D: depurar con datos de GPU o retirarlo.
-5. Recién después, pensar en features nuevas.
+5. Decidir qué hacer con el cubo 3D: depurar con datos de GPU o retirarlo.
+6. Recién después, pensar en features nuevas.
 
 Todo el código está comentado en español explicando **por qué** está así,
 especialmente donde la decisión fue contraintuitiva.
