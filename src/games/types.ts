@@ -85,6 +85,17 @@ export interface GameDefinition<TInput = unknown> {
   requiredSensors: SensorType[];
   /** Si el juego usa inclinación, conviene calibrar antes de empezar. */
   needsCalibration: boolean;
+  /**
+   * El mando no apunta girando, sino MOVIÉNDOSE por el espacio: el jugador
+   * arrastra el teléfono a su alrededor y el cursor lo sigue.
+   *
+   * Activa el rastreo de `core/sensors/tracking/`, que necesita la cámara y por
+   * tanto un gesto del usuario para arrancar (lo da la pantalla de
+   * calibración). Si el teléfono no puede rastrear posición, el juego debe
+   * seguir siendo jugable con la inclinación de siempre: esto es una mejora,
+   * no un requisito.
+   */
+  needsPositionTracking?: boolean;
   /** Si se define, el host puede elegir la duración de la ronda antes de iniciar. */
   duration?: DurationConfig;
   /** Si el juego puede jugarse en pantalla dividida (una sub-partida por jugador). */

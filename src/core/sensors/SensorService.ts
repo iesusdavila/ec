@@ -35,6 +35,24 @@ export class SensorService {
   private tiltAt = 0;
   private calibrationOffset: { beta: number; gamma: number } = { beta: 0, gamma: 0 };
   private acceleration: AccelerationVector = { x: 0, y: 0, z: 0 };
+  /**
+   * Ángulo de giro ACUMULADO en radianes, integrado de `rotationRate`.
+   *
+   * Lo usa el rastreador de posición (`core/sensors/tracking/`) para descontar
+   * de la imagen el desplazamiento que produce girar el teléfono. Se guarda
+   * acumulado y no como velocidad angular a propósito: quien lo consume
+   * necesita el giro EXACTO ocurrido entre dos frames de cámara, y restar dos
+   * ángulos acumulados lo da sin depender de cuándo se muestreó. Muestrear la
+   * velocidad instantánea en el momento del frame perdería los picos ocurridos
+   * entre medias, que es justo cuando la mano gira rápido.
+   *
+   * La deriva del giroscopio no importa aquí: solo se usan DIFERENCIAS dentro
+   * de una ventana de ~33 ms.
+   */
+  private rotation = { x: 0, y: 0, z: 0 };
+  /** Gravedad aislada por paso bajo. Ver `getGravity()`. */
+  private gravity: AccelerationVector = { x: 0, y: 0, z: 0 };
+  private lastMotionAt = 0;
   private lastGestureAt = 0;
   private listening = false;
 
@@ -135,6 +153,28 @@ export class SensorService {
     return this.acceleration;
   }
 
+  /** Giro acumulado en radianes desde que arrancaron los sensores. */
+  getRotationAngle(): AccelerationVector {
+    return this.rotation;
+  }
+
+  /**
+   * Vector de gravedad en los ejes del teléfono, aislado con un paso bajo.
+   *
+   * `accelerationIncludingGravity` mezcla gravedad y movimiento. La gravedad es
+   * constante y el movimiento de un gesto es rápido y de media cero, así que un
+   * paso bajo lento los separa bien. Filtrar importa justo cuando peor se
+   * comporta la lectura cruda: durante un barrido, la aceleración del gesto
+   * llega a varios m/s² y giraría el vector estimado varios grados.
+   *
+   * Lo usa el rastreador de posición para saber con qué ángulo sujeta el
+   * jugador el teléfono y que "mover a la derecha" siga siendo horizontal
+   * aunque lo lleve ladeado.
+   */
+  getGravity(): AccelerationVector {
+    return this.gravity;
+  }
+
   onGesture(listener: (gesture: MotionGesture) => void): Unsubscribe {
     this.gestureListeners.add(listener);
     return () => this.gestureListeners.delete(listener);
@@ -156,6 +196,16 @@ export class SensorService {
     const y = acc.y ?? 0;
     const z = acc.z ?? 0;
     this.acceleration = { x, y, z };
+    // Paso bajo ~0,5 s de constante de tiempo a 60 Hz.
+    const g = this.gravity;
+    const k = g.x === 0 && g.y === 0 && g.z === 0 ? 1 : 0.03;
+    this.gravity = {
+      x: g.x + (x - g.x) * k,
+      y: g.y + (y - g.y) * k,
+      z: g.z + (z - g.z) * k,
+    };
+
+    this.integrateRotation(event);
 
     const magnitude = Math.sqrt(x * x + y * y + z * z);
     const now = Date.now();
@@ -166,6 +216,35 @@ export class SensorService {
       this.gestureListeners.forEach((listener) => listener(gesture));
     }
   };
+
+  /**
+   * Integra `rotationRate` (grados/s) a un ángulo acumulado en radianes.
+   *
+   * `event.interval` es el periodo que declara el propio dispositivo y es más
+   * fiable que medir el tiempo entre callbacks, que el navegador agrupa. Si no
+   * viene, se recurre al reloj con un tope: un frame perdido no debe inyectar
+   * un giro enorme e inventado.
+   */
+  private integrateRotation(event: DeviceMotionEvent): void {
+    const rate = event.rotationRate;
+    if (!rate) return;
+
+    const now = performance.now();
+    let dt = event.interval ? event.interval / 1000 : 0;
+    if (!dt) {
+      dt = this.lastMotionAt ? (now - this.lastMotionAt) / 1000 : 0;
+    }
+    this.lastMotionAt = now;
+    if (dt <= 0 || dt > 0.2) return;
+
+    const toRad = (Math.PI / 180) * dt;
+    // beta gira sobre el eje X, gamma sobre el Y, alpha sobre el Z.
+    this.rotation = {
+      x: this.rotation.x + (rate.beta ?? 0) * toRad,
+      y: this.rotation.y + (rate.gamma ?? 0) * toRad,
+      z: this.rotation.z + (rate.alpha ?? 0) * toRad,
+    };
+  }
 
   private dominantDirection(x: number, y: number, z: number): MotionGesture["direction"] {
     const absX = Math.abs(x);

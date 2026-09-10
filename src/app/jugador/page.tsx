@@ -155,6 +155,7 @@ export default function JugadorPage() {
     return (
       <SensorGate
         requireCalibration={selectedGame.needsCalibration}
+        requirePositionTracking={selectedGame.needsPositionTracking ?? false}
         onDone={() => setCalibrated(true)}
       />
     );

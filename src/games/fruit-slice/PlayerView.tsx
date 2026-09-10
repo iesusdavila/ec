@@ -4,15 +4,33 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import type { GamePlayerProps } from "@/games/types";
 import { sensorService } from "@/core/sensors/SensorService";
 import { useSensorLifecycle } from "@/core/sensors/useSensors";
+import { positionTracking } from "@/core/sensors/tracking/positionTracking";
 import { PointerKalmanFilter } from "@/core/sensors/KalmanFilter";
 import { clientEventBudget } from "@/core/realtime/clientEventBudget";
 import type { AimSample, FruitSliceInput } from "@/games/fruit-slice/logic";
 
 /**
- * El teléfono funciona como un puntero tipo mouse:
- * - Inclinarlo mueve el cursor (el punto rojo del monitor).
+ * El teléfono funciona como un puntero:
+ * - MOVERLO por el aire mueve el cursor (el punto rojo del monitor).
  * - Barrer el cursor por encima de una fruta la corta.
  * - Tocar la pantalla corta en el punto exacto al que se apunta.
+ *
+ * ---------------------------------------------------------------------------
+ * POSICIÓN, NO INCLINACIÓN
+ *
+ * Antes el cursor salía del ÁNGULO del teléfono: `gamma` al eje X y `beta` al
+ * eje Y. Eso convertía el mando en el joystick de una consola —centro fijo, el
+ * teléfono se queda donde está y solo se gira—, cuando lo que se quiere es
+ * mover el aparato por el espacio y que el cursor lo acompañe: llevarlo al
+ * hombro derecho lleva el punto a la derecha, subirlo a la cabeza lo sube.
+ *
+ * Esa posición la da `core/sensors/tracking/` (con ARCore si el teléfono lo
+ * tiene, y si no con flujo óptico calculado aquí mismo). Solo se usan X e Y:
+ * acercar o alejar el teléfono no hace nada, porque el juego es plano.
+ *
+ * La inclinación sigue en el código como PLAN B, y no por nostalgia: si la
+ * habitación está a oscuras, el jugador niega la cámara o el seguimiento se
+ * pierde, es preferible un mando peor que un jugador sin mando.
  *
  * ---------------------------------------------------------------------------
  * CÓMO SE CONSIGUE QUE RESPONDA EN MENOS DE 0,2 s
@@ -31,6 +49,8 @@ import type { AimSample, FruitSliceInput } from "@/games/fruit-slice/logic";
  *    render. El puntero acumulaba retardo aunque la red fuera perfecta.
  *    Ahora el bucle no toca React: escribe el `transform` del punto de vista
  *    previa directamente en el DOM. Cero renders mientras se juega.
+ *    Por lo mismo, el análisis de imagen del rastreo de posición vive en un
+ *    worker y nunca en este hilo.
  *
  * 2. MANDAR LA TRAYECTORIA, NO UN PUNTO. El límite de Pusher es de mensajes,
  *    no de bytes: en el mismo mensaje caben todas las muestras del sensor desde
@@ -55,7 +75,7 @@ import type { AimSample, FruitSliceInput } from "@/games/fruit-slice/logic";
  * ---------------------------------------------------------------------------
  */
 
-// Grados de inclinación (respecto al punto calibrado) para llegar al borde.
+/** Grados de inclinación para llegar al borde. Solo se usa en el plan B. */
 const AIM_RANGE_DEG = 24;
 /**
  * Movimiento (en fracciones de escenario) a partir del cual se encola una
@@ -74,6 +94,22 @@ const FLUSH_MOVE_DELTA = 0.008;
 const IDLE_FLUSH_MS = 350;
 /** Muestras por lote. A 60 Hz y ~9 envíos/s salen ~7; el resto es margen. */
 const MAX_SAMPLES_PER_BATCH = 16;
+/** Cada cuánto se comprueba si el rastreo sigue vivo (ver `mode`). */
+const MODE_POLL_MS = 2000;
+/**
+ * Vigilante del bucle: cada cuánto se comprueba que `requestAnimationFrame`
+ * sigue latiendo, y cuánto silencio se tolera antes de tomar el relevo.
+ *
+ * Hace falta por el modo AR. Dentro de una sesión `immersive-ar` el navegador
+ * conduce el dibujado con `XRSession.requestAnimationFrame`, y el
+ * `requestAnimationFrame` de la ventana puede quedarse sin disparar. Si eso
+ * pasa, este bucle —que es quien mueve el cursor Y quien envía la puntería— se
+ * pararía del todo y el jugador se quedaría sin mando sin ningún aviso.
+ * Con el relevo el juego baja a ~20 cuadros por segundo, que es feo pero
+ * jugable, en vez de congelarse.
+ */
+const LOOP_WATCHDOG_MS = 50;
+const LOOP_STALL_MS = 120;
 
 function clamp01(v: number): number {
   return Math.max(0, Math.min(1, v));
@@ -91,6 +127,8 @@ function round3(v: number): number {
   return Math.round(v * 1000) / 1000;
 }
 
+type AimMode = "position" | "tilt";
+
 export function FruitSlicePlayerView({ sendInput }: GamePlayerProps<FruitSliceInput>) {
   useSensorLifecycle(true);
 
@@ -102,11 +140,33 @@ export function FruitSlicePlayerView({ sendInput }: GamePlayerProps<FruitSliceIn
   });
 
   const dotRef = useRef<HTMLSpanElement>(null);
-  /** Lo rellena el efecto; lo llama el `onPointerDown` del botón. */
+  /** Lo rellena el efecto; lo llama el `onPointerDown` del área de corte. */
   const tapRef = useRef<() => void>(() => {});
   const [flash, setFlash] = useState(false);
+  /**
+   * Con qué está apuntando el jugador AHORA MISMO. Solo sirve para el texto de
+   * ayuda, nunca para el bucle —que decide frame a frame—, y se actualiza cada
+   * dos segundos y únicamente si cambió: un `setState` de más aquí volvería a
+   * meter renders en el hilo que tiene que enviar la puntería.
+   */
+  const [mode, setMode] = useState<AimMode | null>(null);
 
   useEffect(() => {
+    const check = () => {
+      const next: AimMode = positionTracking.read() ? "position" : "tilt";
+      setMode((current) => (current === next ? current : next));
+    };
+    check();
+    const id = setInterval(check, MODE_POLL_MS);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    // El rastreo lo arrancó `SensorGate` (allí había un gesto del usuario).
+    // Aquí solo se declara que se está usando, para que no se apague al
+    // desmontar y volver a montar.
+    positionTracking.retain();
+
     // Todo el estado del bucle vive aquí como variables locales: no se lee ni
     // se escribe durante el render, así que no hace falta que sean refs.
     const filter = new PointerKalmanFilter();
@@ -170,37 +230,57 @@ export function FruitSlicePlayerView({ sendInput }: GamePlayerProps<FruitSliceIn
       return true;
     };
 
-    const loop = (now: number) => {
-      raf = requestAnimationFrame(loop);
+    /**
+     * De dónde sale la puntería en este frame.
+     *
+     * Devuelve `null` cuando el sensor todavía no ha dado un dato NUEVO. Es
+     * importante que sea `null` y no la lectura repetida: si se corrigiera el
+     * filtro con el mismo valor otra vez, entendería "la mano se paró" y
+     * frenaría el puntero sin motivo. La cámara entrega ~30 datos por segundo y
+     * este bucle corre a 60, así que la mitad de los frames caen aquí.
+     */
+    // Nota sobre `clampToStage`, que se usa en los dos caminos: se recorta a un
+    // poco MÁS que el escenario, no exactamente a 0..1. Los dos extremos serían
+    // peores. Recortar justo a 0..1 aplana la velocidad estimada al llegar al
+    // borde y el cursor se frena antes de tiempo; no recortar nada deja que el
+    // estado interno del filtro se vaya a 1,5 si el jugador sigue moviendo el
+    // teléfono más allá del borde, y al volver hay que deshacer ese medio
+    // escenario fantasma antes de que el puntero se mueva. El margen da
+    // velocidad correcta en el borde y acota esa "cuerda" a un par de
+    // centímetros.
+    const readAim = (): { x: number; y: number } | null => {
+      // Camino bueno: posición real del teléfono en el espacio.
+      const position = positionTracking.read();
+      if (position) {
+        if (position.at === lastSensorAt) return null;
+        lastSensorAt = position.at;
+        // Viene como desplazamiento respecto al centro (±0,5 son los bordes).
+        return {
+          x: clampToStage(0.5 + position.x),
+          y: clampToStage(0.5 + position.y),
+        };
+      }
 
-      const dtS = (now - lastStepAt) / 1000;
-      lastStepAt = now;
-
-      // Solo se corrige el filtro cuando el sensor ha dado un dato NUEVO. Si se
-      // corrigiera con la lectura repetida de un frame sin evento, el filtro
-      // entendería "la mano se paró" y frenaría el puntero sin motivo.
-      const tilt = sensorService.getTiltSample();
-      const fresh = tilt.at !== lastSensorAt;
-      if (fresh) lastSensorAt = tilt.at;
-
+      // Plan B: inclinación, el puntero láser de siempre.
+      //
       // gamma (giro izquierda/derecha) -> eje X.
       // beta (adelante/atrás) -> eje Y, con signo negativo: inclinar el borde
       // superior del teléfono hacia abajo baja el cursor, que es el gesto
       // natural de "apuntar más abajo".
-      //
-      // Se recorta a un poco MÁS que el escenario, no exactamente a 0..1. Los
-      // dos extremos serían peores: recortar justo a 0..1 aplana la velocidad
-      // estimada al llegar al borde (el cursor se frena antes de tiempo), y no
-      // recortar nada deja que el estado interno del filtro se vaya a 1,5 si el
-      // teléfono se inclina de más — y al volver hay que recorrer ese medio
-      // escenario fantasma antes de que el puntero se mueva. El margen da
-      // velocidad correcta en el borde y acota esa "cuerda" a un par de grados.
-      const measurement = fresh
-        ? {
-            x: clampToStage(0.5 + tilt.gamma / AIM_RANGE_DEG / 2),
-            y: clampToStage(0.5 - tilt.beta / AIM_RANGE_DEG / 2),
-          }
-        : null;
+      const tilt = sensorService.getTiltSample();
+      if (tilt.at === lastSensorAt) return null;
+      lastSensorAt = tilt.at;
+      return {
+        x: clampToStage(0.5 + tilt.gamma / AIM_RANGE_DEG / 2),
+        y: clampToStage(0.5 - tilt.beta / AIM_RANGE_DEG / 2),
+      };
+    };
+
+    const step = (now: number) => {
+      const dtS = (now - lastStepAt) / 1000;
+      lastStepAt = now;
+
+      const measurement = readAim();
 
       const filtered = filter.step(measurement, dtS);
       aimX = clamp01(filtered.x);
@@ -231,6 +311,16 @@ export function FruitSlicePlayerView({ sendInput }: GamePlayerProps<FruitSliceIn
       if (shouldFlush) flush(now);
     };
 
+    const loop = (now: number) => {
+      raf = requestAnimationFrame(loop);
+      step(now);
+    };
+
+    const watchdog = setInterval(() => {
+      const now = performance.now();
+      if (now - lastStepAt > LOOP_STALL_MS) step(now);
+    }, LOOP_WATCHDOG_MS);
+
     tapRef.current = () => {
       const now = performance.now();
       lastSampleX = aimX;
@@ -242,11 +332,15 @@ export function FruitSlicePlayerView({ sendInput }: GamePlayerProps<FruitSliceIn
     raf = requestAnimationFrame(loop);
     return () => {
       cancelAnimationFrame(raf);
+      clearInterval(watchdog);
       tapRef.current = () => {};
+      // Apaga la cámara al salir del juego, con margen para no hacerlo entre
+      // el desmontaje y el remontaje del modo estricto de React.
+      positionTracking.release();
     };
   }, []);
 
-  function handleSlice(e: ReactPointerEvent<HTMLButtonElement>) {
+  function handleSlice(e: ReactPointerEvent<HTMLDivElement>) {
     e.preventDefault();
     tapRef.current();
     setFlash(true);
@@ -254,56 +348,83 @@ export function FruitSlicePlayerView({ sendInput }: GamePlayerProps<FruitSliceIn
     (navigator as Navigator & { vibrate?: (p: number) => void }).vibrate?.(18);
   }
 
-  return (
-    // Toda la pantalla es la zona de corte: en un teléfono, apuntar con una
-    // mano y acertar un botón pequeño con la otra es innecesariamente difícil.
-    <button
-      type="button"
-      aria-label="Cortar donde apunta el teléfono"
-      onPointerDown={handleSlice}
-      style={{ touchAction: "none" }}
-      className="flex min-h-0 w-full flex-1 select-none flex-col items-center justify-center gap-4 px-6 text-center"
-    >
-      <p className="text-lg font-semibold">Apunta y barre para cortar</p>
+  const positional = mode === "position";
 
-      {/* Mini-réplica del escenario: muestra a dónde apunta el teléfono.
-          `containerType: size` es lo que hace que `100cqw`/`100cqh` dentro
-          signifiquen el ancho/alto de este marco, para poder posicionar el
-          punto con un `transform` desde el bucle sin medir nada. */}
+  return (
+    <div className="flex min-h-0 w-full flex-1 select-none flex-col">
+      {/* Casi toda la pantalla es la zona de corte: en un teléfono, apuntar con
+          una mano y acertar un botón pequeño con la otra es innecesariamente
+          difícil. Es un div y no un <button> porque debajo va el botón de
+          recentrar, y un botón dentro de otro no es HTML válido. */}
       <div
-        className={`relative w-full max-w-xs overflow-hidden rounded-2xl border-4 transition-colors ${
-          flash ? "border-accent bg-accent/10" : "border-border bg-surface"
-        }`}
-        style={{ aspectRatio: "16 / 10", containerType: "size" }}
+        role="button"
+        tabIndex={0}
+        aria-label="Cortar donde apunta el teléfono"
+        onPointerDown={handleSlice}
+        style={{ touchAction: "none" }}
+        className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 px-6 text-center"
       >
+        <p className="text-lg font-semibold">
+          {positional ? "Mueve el teléfono y barre para cortar" : "Apunta y barre para cortar"}
+        </p>
+
+        {/* Mini-réplica del escenario: muestra a dónde apunta el teléfono.
+            `containerType: size` es lo que hace que `100cqw`/`100cqh` dentro
+            signifiquen el ancho/alto de este marco, para poder posicionar el
+            punto con un `transform` desde el bucle sin medir nada. */}
         <div
-          className="absolute inset-0 opacity-40"
-          style={{
-            backgroundImage:
-              "linear-gradient(rgba(127,127,127,0.35) 1px, transparent 1px), linear-gradient(90deg, rgba(127,127,127,0.35) 1px, transparent 1px)",
-            backgroundSize: "25% 25%",
-          }}
-        />
-        <span
-          ref={dotRef}
-          className="absolute h-6 w-6 rounded-full"
-          style={{
-            left: 0,
-            top: 0,
-            transform: "translate3d(calc(0.5 * 100cqw - 50%), calc(0.5 * 100cqh - 50%), 0)",
-            willChange: "transform",
-            backgroundColor: "#FF2E2E",
-            border: "2px solid rgba(255,255,255,0.9)",
-            boxShadow: "0 0 0 4px rgba(255,46,46,0.22), 0 0 18px 6px rgba(255,46,46,0.45)",
-          }}
-        />
+          className={`relative w-full max-w-xs overflow-hidden rounded-2xl border-4 transition-colors ${
+            flash ? "border-accent bg-accent/10" : "border-border bg-surface"
+          }`}
+          style={{ aspectRatio: "16 / 10", containerType: "size" }}
+        >
+          <div
+            className="absolute inset-0 opacity-40"
+            style={{
+              backgroundImage:
+                "linear-gradient(rgba(127,127,127,0.35) 1px, transparent 1px), linear-gradient(90deg, rgba(127,127,127,0.35) 1px, transparent 1px)",
+              backgroundSize: "25% 25%",
+            }}
+          />
+          <span
+            ref={dotRef}
+            className="absolute h-6 w-6 rounded-full"
+            style={{
+              left: 0,
+              top: 0,
+              transform: "translate3d(calc(0.5 * 100cqw - 50%), calc(0.5 * 100cqh - 50%), 0)",
+              willChange: "transform",
+              backgroundColor: "#FF2E2E",
+              border: "2px solid rgba(255,255,255,0.9)",
+              boxShadow: "0 0 0 4px rgba(255,46,46,0.22), 0 0 18px 6px rgba(255,46,46,0.45)",
+            }}
+          />
+        </div>
+
+        <p className="max-w-xs text-sm text-muted">
+          {positional
+            ? "Lleva el teléfono por el aire —arriba, abajo, a los lados— y el punto rojo irá con él. Acercarlo o alejarlo no hace nada. Pasa el punto por encima de una fruta para cortarla, o toca la pantalla para cortar justo donde apunta."
+            : "Inclina el teléfono como un puntero láser. Pasa el punto rojo por encima de una fruta para cortarla, o toca la pantalla para cortar justo donde apunta."}
+        </p>
       </div>
 
-      <p className="max-w-xs text-sm text-muted">
-        Inclina el teléfono como un puntero láser. Pasa el punto rojo por encima
-        de una fruta para cortarla, o toca la pantalla para cortar justo donde
-        apunta.
-      </p>
-    </button>
+      {positional && (
+        <div className="flex shrink-0 justify-center pb-3">
+          {/* El rastreo es relativo: mide desplazamiento, no una referencia
+              absoluta, así que a lo largo de una partida el centro puede
+              correrse unos centímetros. En vez de corregirlo solo —cualquier
+              recentrado automático se sentiría como el muelle del joystick que
+              justamente se quitó— se deja el mando en manos del jugador. */}
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => positionTracking.recenter()}
+            className="rounded-full border border-border px-4 py-1.5 text-xs text-muted"
+          >
+            Recentrar aquí
+          </button>
+        </div>
+      )}
+    </div>
   );
 }

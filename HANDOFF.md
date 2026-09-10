@@ -174,7 +174,7 @@ añade el selector compartido/dividido (solo lo usa Corta frutas).
 | Juego | Control | Configurable | Verificado en navegador | Probado con sensores reales |
 |---|---|---|---|---|
 | Simón dice | 8 botones táctiles (N…NO) | Vidas 1–5 | Sí | No aplica (ya no usa sensores) |
-| Corta frutas | Apuntar (inclinación); barrer el puntero o tocar para cortar | Duración 30–120s + modo | Sí (E2E: corte por barrido y por toque, fruta vs bomba, tasa de mensajes, sin scroll) | Sí (ronda 4) |
+| Corta frutas | **Mover el teléfono por el espacio**; barrer el puntero o tocar para cortar | Duración 30–120s + modo | Sí (E2E: corte por barrido y por toque, fruta vs bomba, tasa de mensajes, sin scroll; rastreo de posición con cámara falsa) | Sí (ronda 4); el rastreo de posición **no** (ronda 7) |
 | Dardos | Mantener presionado + inclinar, soltar | Tiros 3–9 | Sí | **No** |
 | Carrera | Agitar + inclinar | Duración 30–120s | Parcial | **No** |
 | Laberinto | Inclinar | Duración 30–180s | Sí | **No** |
@@ -190,8 +190,9 @@ Detalles relevantes:
   (un carril independiente por jugador), +10 / −10 con números flotantes,
   explosión roja + sacudida al cortar bomba, fruta partida en dos mitades al
   cortarla, y dificultad progresiva (aparecen más rápido con el tiempo).
-  - **El teléfono es un puntero, no un sacudidor.** La inclinación mueve un
-    cursor (punto rojo con halo en el monitor, uno por jugador). Se corta de
+  - **El teléfono es un puntero, no un sacudidor.** Su POSICIÓN en el espacio
+    mueve un cursor (punto rojo con halo en el monitor, uno por jugador). Se
+    corta de
     dos formas: **barriendo** el puntero por encima de un objeto, o **tocando**
     la pantalla del teléfono para cortar en el punto exacto. Antes
     `handleInput` ignoraba la puntería y cortaba "el primer objeto vivo del
@@ -204,9 +205,15 @@ Detalles relevantes:
     hace falta un gesto decidido para cortar.
   - Toda la pantalla del teléfono es el botón de cortar: apuntar con una mano
     y acertar un botón pequeño con la otra era innecesariamente difícil.
-  - Por eso ahora `requiredSensors: ["orientation"]` y `needsCalibration: true`
-    (el punto neutro calibrado = centro de la pantalla). El motor tipa su
-    entrada como `FruitSliceInput` (`{type:"aim"}` / `{type:"slice"}`).
+  - **Posición, no inclinación (ronda 7).** Hasta la ronda 6 el cursor salía
+    del ÁNGULO del teléfono, y eso lo convertía en el joystick de una consola:
+    centro fijo, el aparato se queda donde está y solo se gira. Ahora el mando
+    se mueve por el espacio y el cursor lo acompaña. Ver §5.1.
+  - Por eso `requiredSensors: ["orientation", "gyroscope"]`,
+    `needsCalibration: true` y `needsPositionTracking: true`. El motor tipa su
+    entrada como `FruitSliceInput` (`{type:"aim"}` / `{type:"slice"}`), y esa
+    parte NO cambió: al monitor le sigue llegando una posición 0..1 de
+    escenario, así que `logic.ts`, `clockSync` y el hit-test son los mismos.
   - Fondo: `FruitBackdrop.tsx`, cielo nocturno oscuro con mariposas en tonos
     fríos desaturados y translúcidos, a propósito para no confundirse con
     frutas (cálidas/saturadas) ni bomba (casi negra). Animación 100% CSS en
@@ -218,6 +225,92 @@ Detalles relevantes:
 - **Laberinto** encadena niveles mientras quede tiempo (`LEVELS` en
   `levels.ts`, rotación en `levelRotation.ts`).
 - **Carrera** escala la longitud de pista con la duración elegida.
+
+---
+
+### 5.1 Rastreo de posición del teléfono (ronda 7)
+
+El pedido era claro: *"mi teléfono inicia en la posición 0,0 y yo lo muevo a la
+1,0, 2,0, 1,1 — me muevo con el teléfono alrededor de todo el espacio"*, en vez
+del centro fijo de un joystick. Solo X e Y; acercar o alejar el teléfono no debe
+hacer nada.
+
+**Lo primero que hay que saber, porque ahorra perder un día: esto NO se puede
+hacer con el acelerómetro.** No es cuestión de escribir mejor el código, la
+información no está en la señal. Un acelerómetro mide fuerza específica, y
+"quieto pero inclinado 0,5°" produce EXACTAMENTE la misma lectura que
+"acelerando a 0,086 m/s²": son indistinguibles. Al integrar dos veces, ese error
+crece al cuadrado:
+
+| tiempo | deriva de posición |
+|---|---|
+| 1 s | 4 cm |
+| 2 s | 17 cm |
+| 3 s | 39 cm |
+| 5 s | 1,07 m |
+
+El espacio de juego (hombro a hombro, pecho a cabeza) mide ~50-60 cm: el cursor
+se saldría de la pantalla en dos o tres segundos de cada ronda. Ningún filtro lo
+arregla, tampoco el Kalman, porque un filtro corrige contra una referencia
+absoluta y aquí no hay ninguna. Tampoco es una limitación del navegador: la
+Generic Sensor API define ocho sensores (acelerómetro, giroscopio, gravedad,
+magnetómetro, orientación absoluta y relativa, luz) y ninguno da posición;
+Android tampoco tiene un sensor de posición, ARCore la construye con la cámara.
+
+La única fuente real de posición en un teléfono es **la cámara**. De ahí los dos
+rastreadores de `core/sensors/tracking/`, que `positionTracking.enable()` elige
+por orden:
+
+1. **`XrPoseTracker`** — delega en ARCore vía WebXR. Preciso (deriva de
+   centímetros) y con escala métrica real. Peajes: la pose 6DoF **solo** existe
+   dentro de una sesión `immersive-ar` (está así en el estándar), lo que obliga
+   a `dom-overlay` para poner la interfaz sobre la vista de cámara; y solo hay
+   WebXR en Android.
+2. **`OpticalFlowTracker`** — lo calculamos nosotros, y es la red universal:
+   funciona también en iPhone y no secuestra la pantalla.
+3. Si ninguno arranca, el juego **cae a la inclinación de siempre**. Nunca se
+   deja a un jugador sin mando: `SensorGate` lo explica y ofrece seguir.
+
+Todo esto necesita **HTTPS** (cámara y WebXR son de contexto seguro).
+
+#### Cómo funciona el flujo óptico
+
+El problema de fondo: en la imagen, girar la cámara y trasladarla producen el
+mismo tipo de desplazamiento. Sin separarlos, girar la muñeca movería el cursor,
+que es justo el comportamiento de joystick que se quería quitar.
+
+La clave es que el giroscopio mide la rotación bien y sin deriva relevante en la
+escala de un fotograma, y que el flujo que produce una rotación es lineal en el
+ángulo: `m = M·g`. En vez de deducir `M` de la geometría —haría falta la focal,
+la orientación con la que el navegador entrega los frames y si hay espejado,
+distinto en cada teléfono— **se aprende por mínimos cuadrados mientras se
+juega**. Lo que sobra al restar `M·g` es traslación pura.
+
+La matemática vive en `flowEstimator.ts`, aparte del worker y **sin nada del
+navegador**, para poder probarla con imágenes sintéticas (ver §8.1). El análisis
+de imagen corre en un Web Worker: meterlo en el hilo principal reproduciría a lo
+grande el bug de retardo de §7.6.
+
+#### Qué NO está resuelto
+
+- **Nada de esto se ha probado en un teléfono físico.** Lo verificado es la
+  matemática (§8.1) y la cadena completa en Chromium con cámara falsa. Falta
+  la prueba real, que es la que dirá si `AIM_HALF_RANGE` está bien elegido.
+- El rastreo es **relativo**: mide desplazamiento, no una referencia absoluta,
+  así que a lo largo de una partida el centro puede correrse unos centímetros.
+  Hay un botón "Recentrar aquí" en la pantalla del jugador. Se descartó
+  recentrar solo porque cualquier muelle automático se siente como el joystick
+  que se acaba de quitar.
+- **Barridos muy rápidos** desenfocan la imagen y degradan el seguimiento —el
+  mismo riesgo en ARCore—. Es el punto que más conviene mirar en la prueba real.
+- La ganancia depende de **la distancia a lo que enfoca la cámara trasera**: la
+  misma partida en un pasillo estrecho y en un salón grande no se sienten igual.
+- En sesión AR, el `requestAnimationFrame` de la ventana puede no dispararse
+  (lo conduce `XRSession`). El bucle del jugador lleva un vigilante que toma el
+  relevo a ~20 fps para que el juego no se congele; feo, pero jugable.
+- La página de depuración `/dev/posicion` (solo en desarrollo) muestra qué
+  rastreador se eligió y las lecturas en vivo, y deja el servicio en
+  `window.__positionTracking` para trastear desde la consola del teléfono.
 
 ---
 
@@ -257,10 +350,18 @@ calibrados contra un teléfono real:
   "agitón"), `GESTURE_COOLDOWN_MS = 350`.
 - Laberinto/cubo: `MAX_TILT_DEG = 30`, `MAX_ACCEL`, `DAMPING_PER_S`.
 - Dardos: `AIM_RANGE_DEG = 35`.
-- Corta frutas: `AIM_RANGE_DEG = 28`, `AIM_SMOOTHING = 0.4` (en `PlayerView.tsx`);
-  `SLICE_RADIUS = 0.16` (en `logic.ts`). Si el cursor no llega a los bordes,
-  baja `AIM_RANGE_DEG`; si tiembla, baja `AIM_SMOOTHING`; si cuesta acertar,
-  sube `SLICE_RADIUS`.
+- Corta frutas, **la perilla principal**: `AIM_HALF_RANGE = 0.13` en
+  `core/sensors/tracking/OpticalFlowTracker.ts`. Es cuánto movimiento del
+  teléfono equivale a medio escenario, medido como razón traslación/profundidad
+  (una cámara sola no puede dar metros). En un salón donde la cámara trasera
+  enfoca la pared de enfrente a ~2,5 m son ~32 cm del centro al borde. **Depende
+  de la habitación**: cuanto más lejos esté aquello a lo que apunta la cámara,
+  más movimiento real hace falta. Si va lento, baja el número; si se dispara,
+  súbelo. `/dev/posicion` existe para ajustarlo sin entrar a una partida.
+- Corta frutas en modo AR: `XR_HALF_RANGE_M = 0.3` en `XrPoseTracker.ts`. Ahí sí
+  son metros de verdad, porque ARCore da escala real.
+- Corta frutas, plan B de inclinación: `AIM_RANGE_DEG = 24` en `PlayerView.tsx`;
+  `SLICE_RADIUS = 0.19` en `logic.ts`. Si cuesta acertar, sube `SLICE_RADIUS`.
 
 Si en el teléfono un juego se siente demasiado sensible o demasiado sordo,
 **esos números son la primera perilla que hay que mover**, no la arquitectura.
@@ -408,6 +509,28 @@ Dos detalles que hacen falta: el modo "strip-only" de Node **no admite
 propiedades de parámetro** (`constructor(private x: T)`), hay que expandirlas en
 la copia; y los imports necesitan extensión `.ts` explícita.
 
+**El estimador de flujo óptico tiene su arnés escrito y se ejecuta con un solo
+comando** (es la excepción a "no hay tests": comprueba cosas que no se pueden
+mirar a ojo en un teléfono):
+
+```bash
+node --experimental-strip-types docs/verificacion-flujo-optico.ts
+```
+
+Fabrica una textura y recorta "fotogramas" de ella; mover la ventana de recorte
+equivale exactamente a que la escena se desplace, así que la respuesta correcta
+se conoce con precisión de subpíxel. Comprueba el signo y la magnitud de la
+traslación en ambos ejes, que la rotación pura NO mueva nada, que la regresión
+aprenda la focal real (se simula una distinta de la semilla a propósito), que
+una escena sin textura devuelva confianza 0 en vez de "quieto", y que todo siga
+funcionando con la imagen girada 90°, 180° o espejada.
+
+Encontró dos fallos antes de que nada llegara a un teléfono: la búsqueda SSD
+devuelve el desplazamiento de la VENTANA, que es el negativo del flujo (el
+cursor se habría movido al revés); y el peso del valor previo de la regresión
+estaba ~10.000 veces por encima de la escala real de g², con lo que la focal
+jamás se habría aprendido y girar la muñeca habría seguido moviendo el cursor.
+
 Lo que conviene medir ahí, porque es lo que se rompió al hacerlo:
 
 - **Ruido contra retardo del filtro**, con ruido de sensor sintético. La primera
@@ -511,7 +634,11 @@ Ronda 6 (latencia y estabilidad del puntero):
 | Que el corte sea muy preciso | Hecho, por tres vías. (1) El teléfono manda la **trayectoria completa** a 60 Hz dentro del mismo mensaje en vez de un punto cada 120 ms: un barrido en curva sobre una fruta ya no se pierde (verificado). (2) La latencia se **mide** en vez de suponerse (`clockSync.ts`), así que el hit-test evalúa el objeto donde el jugador lo veía; con 250 ms de latencia el corte ahora acierta y antes fallaba (verificado). (3) El toque de pantalla viaja **dentro del lote**, marcado y fechado, así que ya no puede caerse por exceso de cuota como pasaba al tocar rápido. Y una trampa que apareció al muestrear más rápido: a 17 ms entre muestras el ruido del sensor simula un barrido y detonaba bombas solo (7% de los lotes con la mano quieta), así que la velocidad del gesto se mide sobre una ventana de 50 ms aunque el tramo que corta siga siendo el fino. Verificado: 0 de 40. |
 | — | De propina: el monitor muestra la latencia real medida de cada teléfono en el encabezado del juego (verde <120 ms, ámbar <200 ms, rojo por encima). Antes no había forma de saber si el puntero iba raro por la red o por otra cosa. |
 
----
+Ronda 7 (rastreo de posición del teléfono):
+
+| Pedido | Qué se hizo |
+|---|---|
+| "Siempre tengo que tener el teléfono quieto y solo girarlo, como el joystick de un play. Quiero mover el teléfono literalmente por el espacio y que el juego lo siga, solo en X e Y" | Hecho, con cámara. Antes hubo que descartar el camino evidente: con el acelerómetro **es imposible**, la doble integración deriva 1,07 m en 5 s sobre un espacio de juego de 50-60 cm, y ningún sensor de navegador ni de Android da posición (ver §5.1). Se implementaron dos rastreadores: ARCore vía WebXR cuando existe, y flujo óptico propio —con la rotación descontada por giroscopio— como red universal, con la inclinación de siempre como plan B si ninguno arranca. Verificado: la matemática con imágenes sintéticas (22 comprobaciones, §8.1) y la cadena completa en Chromium con cámara falsa de movimiento conocido. **Falta la prueba en un teléfono real.** |
 
 ## 10. Si vas a seguir tú
 
@@ -519,10 +646,16 @@ Orden sugerido:
 
 1. **Probar en un teléfono real vía HTTPS** (Vercel es lo más rápido). Es la
    única forma de validar §6.2 y de saber si §6.1 sigue vivo.
-2. Ajustar umbrales de sensores con datos reales (usar `/dev/sensores`, que
+2. **Ajustar `AIM_HALF_RANGE` de Corta frutas con el teléfono en la mano**
+   (usar `/dev/posicion`, que muestra qué rastreador se eligió y las lecturas
+   en vivo). Es el único número del rastreo que no se puede elegir a ciegas:
+   depende de la habitación. Comprobar también lo que no se ha podido probar
+   sin teléfono: que girar la muñeca ya no mueva el cursor, y si un barrido
+   rápido rompe el seguimiento.
+3. Ajustar umbrales de sensores con datos reales (usar `/dev/sensores`, que
    muestra inclinación, aceleración y gestos en vivo).
-3. Decidir qué hacer con el cubo 3D: depurar con datos de GPU o retirarlo.
-4. Recién después, pensar en features nuevas.
+4. Decidir qué hacer con el cubo 3D: depurar con datos de GPU o retirarlo.
+5. Recién después, pensar en features nuevas.
 
 Todo el código está comentado en español explicando **por qué** está así,
 especialmente donde la decisión fue contraintuitiva.

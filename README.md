@@ -34,6 +34,7 @@ src/
 │   ├── monitor/              Flujo completo del monitor
 │   ├── jugador/               Flujo completo del jugador
 │   ├── dev/sensores/          Pantalla de depuración de sensores (solo desarrollo)
+│   ├── dev/posicion/           Depuración del rastreo de posición (solo desarrollo)
 │   └── api/
 │       ├── pusher/auth/       Firma la autenticación de canales presence
 │       └── session/create/    Genera un PIN libre
@@ -42,6 +43,7 @@ src/
 │   ├── realtime/             Cliente/servidor de Pusher, canal presence, eventos
 │   ├── session/               Máquina de estados de sesión + store (Zustand)
 │   ├── sensors/                SensorService: orientación, movimiento, gestos, calibración
+│   │   └── tracking/            Rastreo de la POSICIÓN del teléfono en el espacio
 │   └── utils/
 │
 ├── games/                  Un módulo independiente por juego
@@ -94,11 +96,40 @@ de mantener estado en memoria de un servidor de Node de larga duración.
 
 `SensorService` (`src/core/sensors/SensorService.ts`) envuelve
 `deviceorientation` / `devicemotion` detrás de una interfaz simple
-(`getTilt()`, `getAcceleration()`, `onGesture()`, `calibrate()`,
-`requestPermission()`). Ningún juego llama a las APIs del navegador
-directamente. Antes de jugar un juego que usa inclinación, el jugador pasa
-por una calibración rápida que fija su forma de sostener el teléfono como
-posición neutra.
+(`getTilt()`, `getAcceleration()`, `getRotationAngle()`, `getGravity()`,
+`onGesture()`, `calibrate()`, `requestPermission()`). Ningún juego llama a las
+APIs del navegador directamente. Antes de jugar un juego que usa inclinación, el
+jugador pasa por una calibración rápida que fija su forma de sostener el
+teléfono como posición neutra.
+
+### Rastreo de posición
+
+Corta frutas no se juega inclinando el teléfono, sino **moviéndolo por el
+espacio**: se lleva el aparato al hombro derecho y el cursor va a la derecha, se
+sube a la altura de la cabeza y el cursor sube. Solo cuentan X e Y; acercar o
+alejar el teléfono no hace nada, porque el juego es plano.
+
+Eso **no se puede sacar del acelerómetro**: integrarlo dos veces deriva más de
+un metro en cinco segundos sobre un espacio de juego de medio metro, y ningún
+sensor de navegador ni de Android entrega posición. La única fuente real es la
+cámara, así que `src/core/sensors/tracking/` tiene dos implementaciones y elige
+la mejor disponible:
+
+- **ARCore vía WebXR** cuando el teléfono lo trae: preciso y con escala métrica.
+- **Flujo óptico propio** en cualquier otro caso: compara fotogramas de la
+  cámara trasera a baja resolución en un Web Worker y le descuenta la rotación
+  usando el giroscopio, de modo que girar la muñeca no mueve el cursor y
+  trasladar el teléfono sí.
+
+Si ninguno arranca —sin permiso de cámara, a oscuras, o un navegador sin
+soporte—, el juego **cae a la inclinación de siempre** y avisa: nunca deja a un
+jugador sin mando. Ambos caminos requieren **HTTPS**.
+
+La perilla a ajustar es `AIM_HALF_RANGE` en `OpticalFlowTracker.ts`: depende de
+lo lejos que esté aquello a lo que apunta la cámara trasera. `/dev/posicion`
+sirve para calibrarla sin entrar a una partida, y
+`node --experimental-strip-types docs/verificacion-flujo-optico.ts` comprueba la
+matemática con imágenes sintéticas.
 
 ### Motor de juego
 
@@ -122,7 +153,7 @@ código de los demás.
 | Juego | Jugadores | Control | Configurable antes de iniciar |
 |---|---|---|---|
 | Simón dice | 1–5 | 8 botones en pantalla (N, NE, E, SE, S, SO, O, NO) | Vidas por jugador (1–5) |
-| Corta frutas | 1–3 | Inclinar el teléfono mueve un puntero en la pantalla; barrerlo sobre una fruta la corta, o se toca el teléfono para cortar en ese punto | Duración (30–120s) y modo compartido / pantalla dividida |
+| Corta frutas | 1–3 | Mover el teléfono por el aire mueve un puntero en la pantalla; barrerlo sobre una fruta la corta, o se toca el teléfono para cortar en ese punto | Duración (30–120s) y modo compartido / pantalla dividida |
 | Dardos | 1–5 | Mantener presionado + inclinar para apuntar, soltar para lanzar | Tiros por jugador (3–9) |
 | Carrera | 2–5 | Agitar para avanzar, inclinar para cambiar de carril | Duración (30–120s; la pista crece con el tiempo elegido) |
 | Laberinto de equilibrio | 1–4 | Inclinación (orientación / giroscopio) | Duración (30–180s; encadena niveles mientras quede tiempo) |

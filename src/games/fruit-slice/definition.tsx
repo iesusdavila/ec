@@ -11,13 +11,16 @@ import { FruitSliceThumbnail } from "@/games/fruit-slice/Thumbnail";
 export const fruitSliceDefinition: GameDefinition<FruitSliceInput> = {
   id: "fruit-slice",
   name: "Corta frutas",
-  shortDescription: "Apunta con el teléfono como un puntero y corta las frutas, evita las bombas",
+  shortDescription: "Mueve el teléfono por el aire para llevar el cursor y corta las frutas, evita las bombas",
   minPlayers: 1,
   maxPlayers: 3,
-  // Ahora el control es de puntería (inclinación), no de agitar: necesita
-  // orientación y una calibración previa que fije el punto neutro = centro.
-  requiredSensors: ["orientation"],
+  // El control es de puntería. La forma buena es rastreando la POSICIÓN del
+  // teléfono (mover el aparato por el espacio arrastra el cursor); la
+  // inclinación queda como plan B para teléfonos que no puedan rastrear, y por
+  // eso se siguen pidiendo orientación y calibración.
+  requiredSensors: ["orientation", "gyroscope"],
   needsCalibration: true,
+  needsPositionTracking: true,
   duration: { min: 30, max: 120, default: 45, step: 15, unit: "seconds" },
   supportsSplitScreen: true,
   // El teléfono es solo un mando: no necesita el estado completo y recibirlo le
